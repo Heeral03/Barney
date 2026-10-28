@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Barney</title>
+<style>
+  :root { --bg:#f6f4f1; --card:#fff; --ink:#1f2328; --muted:#6b7280; --accent:#c2410c; --user:#c2410c; --line:#e7e2dc; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#17181a; --card:#222427; --ink:#ececec; --muted:#9aa0a6; --accent:#fb923c; --user:#c2410c; --line:#33363a; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; height:100dvh; display:flex; flex-direction:column; background:var(--bg); color:var(--ink);
+         font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:12px 16px; display:flex; align-items:center; justify-content:space-between;
+           border-bottom:1px solid var(--line); background:var(--card); }
+  header h1 { margin:0; font-size:18px; } header small { color:var(--muted); margin-left:8px; font-weight:400; }
+  header button { border:1px solid var(--line); background:none; color:var(--ink); padding:6px 12px; border-radius:8px; cursor:pointer; }
+  #chat { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:min(680px,88%); padding:10px 14px; border-radius:16px; word-wrap:break-word; }
+  .msg p { margin:0 0 6px; } .msg p:last-child { margin:0; }
+  .msg ul,.msg ol { margin:4px 0; padding-left:22px; }
+  .lily { align-self:flex-start; background:var(--card); border:1px solid var(--line); border-bottom-left-radius:4px; }
+  .user { align-self:flex-end; background:var(--user); color:#fff; border-bottom-right-radius:4px; white-space:pre-wrap; }
+  .opts { align-self:flex-start; display:flex; flex-wrap:wrap; gap:8px; max-width:min(680px,100%); }
+  .opts button { border:1px solid var(--accent); background:none; color:var(--accent); padding:7px 14px; border-radius:999px; font:inherit; font-size:14px; cursor:pointer; }
+  .opts button:hover { background:var(--accent); color:#fff; }
+  .card.best { border:2px solid var(--accent); }
+  .card .badge { position:absolute; top:6px; right:6px; background:var(--accent); color:#fff; font-size:11px; padding:2px 8px; border-radius:999px; }
+  .card .badge.warn { background:#b45309; top:auto; right:auto; bottom:6px; left:6px; }
+  .memnote { align-self:flex-start; color:var(--muted); font-size:12.5px; margin:-4px 0 0 6px; }
+  .memlist { align-self:flex-start; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px 12px; max-width:min(680px,88%); }
+  .memlist div { display:flex; justify-content:space-between; gap:12px; padding:3px 0; font-size:14px; }
+  .memlist button { border:0; background:none; color:var(--muted); cursor:pointer; }
+  .typing { color:var(--muted); font-style:italic; }
+  .cards { align-self:flex-start; display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; width:min(680px,100%); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden; display:flex; flex-direction:column; }
+  .card .img { aspect-ratio:1/1; background:#fff; display:flex; align-items:center; justify-content:center; position:relative; }
+  .card img { width:100%; height:100%; object-fit:contain; }
+  .card .num { position:absolute; top:6px; left:6px; background:var(--accent); color:#fff; font-size:12px; width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
+  .card .heart { position:absolute; bottom:6px; right:6px; width:30px; height:30px; border-radius:50%; border:1px solid var(--line);
+                 background:var(--card); color:var(--muted); font-size:17px; line-height:1; cursor:pointer; padding:0; }
+  .card .heart.on { color:#e11d48; border-color:#e11d48; }
+  .wishrow { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:6px 0; font-size:14px; border-top:1px solid var(--line); }
+  .wishrow:first-child { border-top:0; } .wishrow a { color:var(--accent); }
+  .tablewrap { align-self:stretch; flex-shrink:0; overflow-x:auto; background:var(--card); border:1px solid var(--line); border-radius:14px; }
+  .cmp-table { border-collapse:collapse; font-size:13px; min-width:100%; }
+  .cmp-table th, .cmp-table td { padding:8px 10px; border-top:1px solid var(--line); text-align:left; vertical-align:top; min-width:130px; }
+  .cmp-table thead th { border-top:0; vertical-align:bottom; }
+  .cmp-table th.rowname { position:sticky; left:0; background:var(--card); color:var(--muted); font-weight:500; min-width:92px; }
+  .cmp-table th.best, .cmp-table td.best { background:rgba(194,65,12,.07); }
+  .cmp-table img { width:64px; height:64px; object-fit:contain; background:#fff; border-radius:8px; display:block; margin-bottom:4px; }
+  .cmp-table .t { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; font-weight:600; }
+  .cmp-table .yes { color:#15803d; font-weight:700; } .cmp-table .no { color:#b91c1c; font-weight:700; } .cmp-table .unk { color:var(--muted); }
+  .cmp-table .sec td, .cmp-table .sec th { background:var(--bg); color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .cmp-table a.buy { display:inline-block; margin-top:4px; padding:4px 10px; border-radius:8px; background:var(--accent); color:#fff; text-decoration:none; font-size:12px; }
+  .stores { font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:2px; margin-top:2px; }
+  .card .stores a { margin:0; padding:2px 0; background:none; color:var(--ink); border-radius:0; text-align:left; text-decoration:none;
+                    display:flex; justify-content:space-between; gap:6px; font-size:12px; }
+  .card .stores a:hover { text-decoration:underline; } .card .stores .low { color:#15803d; font-weight:700; } .card .stores .risky { color:var(--muted); }
+  .card .cmp { margin-top:auto; border:1px solid var(--accent); background:none; color:var(--accent); padding:6px; border-radius:8px; font:inherit; font-size:12px; cursor:pointer; }
+  .card .noimg { color:var(--muted); font-size:13px; }
+  .card .body { padding:10px; display:flex; flex-direction:column; gap:4px; flex:1; }
+  .card .title { font-size:13px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .card .price { font-weight:700; font-size:16px; }
+  .card .meta { color:var(--muted); font-size:12px; }
+  .card a { margin-top:auto; text-align:center; padding:7px; border-radius:8px; background:var(--accent); color:#fff; text-decoration:none; font-size:13px; }
+  .card .nolink { margin-top:auto; text-align:center; font-size:12px; color:var(--muted); padding:7px; }
+  form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); background:var(--card); }
+  input { flex:1; padding:12px 14px; border-radius:12px; border:1px solid var(--line); background:var(--bg); color:var(--ink); font:inherit; }
+  input:focus { outline:2px solid var(--accent); border-color:transparent; }
+  form button { padding:0 20px; border:0; border-radius:12px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  form button:disabled { opacity:.5; cursor:default; }
+</style>
+</head>
+<body>
+<header><h1>Barney<small>your shopping buddy</small></h1><span><button id="wish">Wishlist</button> <button id="mem">Memory</button> <button id="new">New chat</button></span></header>
+<div id="chat"></div>
+<form id="form">
+  <input id="input" placeholder="Pick an option or type your own..." autocomplete="off" autofocus>
+  <button id="send">Send</button>
+</form>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<script>
+const chat = document.getElementById("chat"), form = document.getElementById("form"),
+      input = document.getElementById("input"), send = document.getElementById("send");
+
+function newId() { return "web-" + Math.random().toString(36).slice(2) + Date.now().toString(36); }
+// The thread survives a refresh (the server keeps the chat); "New chat" starts a fresh one.
+let threadId = newId();
+try { threadId = localStorage.getItem("barney_thread") || threadId; localStorage.setItem("barney_thread", threadId); } catch {}
+// A stable id per browser: long-term memory (sizes, brands, tastes) follows it across chats.
+let userId = "anon";
+try { userId = localStorage.getItem("barney_user") || ("u-" + newId()); localStorage.setItem("barney_user", userId); } catch {}
+
+function add(text, who) {
+  const d = document.createElement("div");
+  d.className = "msg " + who;
+  if (who === "lily" && window.marked && window.DOMPurify) d.innerHTML = DOMPurify.sanitize(marked.parse(text));
+  else d.textContent = text;
+  chat.appendChild(d); chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function addCards(products) {
+  if (!products || !products.length) return;
+  const wrap = el("div", "cards");
+  for (const p of products) {
+    const card = el("div", "card");
+    const imgBox = el("div", "img");
+    if (p.image_url) {
+      const img = document.createElement("img");
+      img.src = p.image_url; img.alt = p.title; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+      img.onerror = () => { img.remove(); imgBox.appendChild(el("span", "noimg", "No preview")); };
+      imgBox.appendChild(img);
+    } else imgBox.appendChild(el("span", "noimg", "No preview"));
+    imgBox.appendChild(el("span", "num", p.number));
+    const heart = el("button", "heart" + (wished.has(wishKey(p)) ? " on" : ""), wished.has(wishKey(p)) ? "♥" : "♡");
+    heart.type = "button"; heart.title = "Save to wishlist: helps me learn what you like";
+    heart.onclick = () => toggleWish(p, heart);
+    imgBox.appendChild(heart);
+    if (p.over_budget) imgBox.appendChild(el("span", "badge warn", "Over budget"));
+    if (p.best) { card.classList.add("best"); imgBox.appendChild(el("span", "badge", "Best for you")); }
+    const body = el("div", "body");
+    body.appendChild(el("div", "title", p.title));
+    const price = el("div", "price", p.price_display + (p.price_verified ? " ✓" : "")); body.appendChild(price);
+    const rating = p.rating ? `★ ${p.rating}` + (p.rating_count ? ` (${p.rating_count.toLocaleString("en-IN")})` : "") : "no ratings yet";
+    body.appendChild(el("div", "meta", `${p.seller} · ${rating}`));
+    const storesBox = el("div", "stores"); body.appendChild(storesBox);
+    const buy = el("div"); buy.style.marginTop = "auto"; body.appendChild(buy);
+    const show = () => renderBuy(p, storesBox, buy, price);
+    show(); wireCompare(p, buy, show);
+    card.append(imgBox, body); wrap.appendChild(card);
+  }
+  chat.appendChild(wrap); chat.scrollTop = chat.scrollHeight;
+}
+// Buying: the card links to the cheapest reliable store once prices are compared; before that it shows the listed price.
+function renderBuy(p, storesBox, buy, priceEl) {
+  priceEl.textContent = p.price_display + (p.price_verified ? " ✓" : "");
+  storesBox.innerHTML = "";
+  if (p.stores && p.stores.length > 1) {
+    const reliable = p.stores.filter((s) => s.trusted), lowest = Math.min(...(reliable.length ? reliable : p.stores).map((s) => s.price_inr));
+    for (const st of p.stores.slice(0, 4)) {
+      const cls = !st.trusted ? "risky" : st.price_inr === lowest ? "low" : null;
+      const a = el("a"); a.href = st.link; a.target = "_blank"; a.rel = "noopener noreferrer"; a.title = st.trusted ? "" : "A store I can't vouch for";
+      a.append(el("span", cls, st.name + (st.trusted ? "" : " ⚠")),
+               el("span", cls, st.price_display + (st.verified === true || st.verified === "corrected" ? " ✓" : "")));
+      storesBox.appendChild(a);
+    }
+  }
+  buy.innerHTML = "";
+  if (p.link) {
+    const label = p.link_domain ? `Buy at ${p.seller}${p.seller_trusted === false ? " ⚠" : ""}` : "View";
+    const a = el("a", null, label); a.href = p.link; a.target = "_blank"; a.rel = "noopener noreferrer";
+    a.style.cssText = "display:block;text-align:center;padding:7px;border-radius:8px;background:var(--accent);color:#fff;text-decoration:none;font-size:13px";
+    buy.appendChild(a);
+  } else buy.appendChild(el("div", "nolink", "No link found"));
+}
+function wireCompare(p, buy, redraw) {
+  if (!p.token || (p.stores && p.stores.length)) return;
+  const b = el("button", "cmp", "Compare prices across stores"); b.type = "button";
+  b.onclick = async () => {
+    b.disabled = true; b.textContent = "Checking stores...";
+    try {
+      const r = await (await fetch("/compare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: p.token }) })).json();
+      if (r.stores && r.stores.length) {
+        p.stores = r.stores;
+        if (r.cheapest) Object.assign(p, r.cheapest, { link_kind: "store" });
+        redraw(); if (r.text) { const n = el("div", "memnote", r.text.replace(/\*\*/g, "")); chat.appendChild(n); chat.scrollTop = chat.scrollHeight; }
+      } else { b.textContent = "No other stores found"; }
+    } catch { b.textContent = "Couldn't compare, try again"; b.disabled = false; }
+  };
+  buy.parentNode.insertBefore(b, buy);
+}
+
+// Wishlist: hearted listings show what the shopper likes the look of; the server also learns a taste from each one.
+const wished = new Map();  // key -> server id
+function wishKey(p) { return (p.link || p.title || "").toLowerCase(); }
+async function loadWishlist() {
+  try {
+    const list = await (await fetch("/wishlist?user_id=" + encodeURIComponent(userId))).json();
+    wished.clear(); for (const w of list) wished.set(wishKey(w), w.id);
+  } catch {}
+}
+async function toggleWish(p, btn) {
+  const key = wishKey(p);
+  try {
+    if (wished.has(key)) {
+      await fetch(`/wishlist/${wished.get(key)}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" });
+      wished.delete(key); btn.classList.remove("on"); btn.textContent = "♡";
+    } else {
+      await fetch("/wishlist", { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify({ user_id: userId, product: p.product || "", offer: p }) });
+      await loadWishlist(); btn.classList.add("on"); btn.textContent = "♥";
+    }
+  } catch {}
+}
+async function showWishlist() {
+  const open = document.querySelector(".wishpanel");
+  if (open) { open.remove(); return; }
+  await loadWishlist();
+  const list = await (await fetch("/wishlist?user_id=" + encodeURIComponent(userId))).json();
+  const box = el("div", "memlist wishpanel");
+  if (!list.length) box.appendChild(el("div", null, "Nothing saved yet. Tap the ♡ on a product and I'll learn what you like."));
+  for (const w of list) {
+    const row = el("div", "wishrow");
+    const label = el("span", null, `${w.title.slice(0, 70)} · ${w.price_display || ""}`);
+    row.appendChild(label);
+    const side = el("span");
+    if (w.link) { const a = el("a", null, "View"); a.href = w.link; a.target = "_blank"; a.rel = "noopener noreferrer"; side.append(a, " "); }
+    const x = el("button", null, "remove");
+    x.onclick = async () => { await fetch(`/wishlist/${w.id}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" });
+                              wished.delete(wishKey(w)); row.remove(); };
+    side.appendChild(x); row.appendChild(side); box.appendChild(row);
+  }
+  chat.appendChild(box); chat.scrollTop = chat.scrollHeight;
+}
+document.getElementById("wish").onclick = showWishlist;
+
+// Side by side: options as columns; price, seller and rating first, then the specs, then how each one meets the shopper's needs.
+function addTable(t) {
+  if (!t || !t.rows || !t.rows.length) return;
+  const wrap = el("div", "tablewrap"), table = el("table", "cmp-table"), thead = el("thead"), tbody = el("tbody");
+  const head = el("tr"); head.appendChild(el("th", "rowname", ""));
+  for (const r of t.rows) {
+    const th = el("th", r.best ? "best" : null);
+    if (r.image_url) { const img = document.createElement("img"); img.src = r.image_url; img.alt = ""; img.referrerPolicy = "no-referrer"; img.onerror = () => img.remove(); th.appendChild(img); }
+    th.appendChild(el("div", "t", `#${r.number} ${r.title}`));
+    if (r.best) th.appendChild(el("div", "unk", "My pick"));
+    head.appendChild(th);
+  }
+  thead.appendChild(head);
+  const row = (label, cell, cls) => {
+    const tr = el("tr", cls || null); tr.appendChild(el("th", "rowname", label));
+    for (const r of t.rows) { const td = el("td", r.best ? "best" : null); cell(td, r); tr.appendChild(td); }
+    tbody.appendChild(tr);
+  };
+  const section = (label) => { const tr = el("tr", "sec"); const th = el("th", null, label); th.colSpan = t.rows.length + 1; tr.appendChild(th); tbody.appendChild(tr); };
+  row("Price", (td, r) => { td.appendChild(el("b", null, r.price_display + (r.price_verified ? " ✓" : ""))); });
+  row("Sold by", (td, r) => {
+    td.appendChild(el("div", null, r.seller + (r.seller_trusted === false ? " ⚠" : "")));
+    if (r.link) { const a = el("a", "buy", "Buy"); a.href = r.link; a.target = "_blank"; a.rel = "noopener noreferrer"; td.appendChild(a); }
+    else td.appendChild(el("div", "unk", "no seller link yet"));
+  });
+  row("Rating", (td, r) => td.appendChild(el("span", r.rating ? null : "unk", r.rating ? `★ ${r.rating}` + (r.rating_count ? ` (${r.rating_count.toLocaleString("en-IN")})` : "") : "no ratings")));
+  if (t.specs.length) section("Specifications");
+  for (const spec of t.specs) row(spec, (td, r) => td.appendChild(el("span", r.values[spec] ? null : "unk", r.values[spec] || "not stated")));
+  if (t.requirements.length) section("Your needs");
+  for (const need of t.requirements) row(need, (td, r) => {
+    const m = r.matches[need] || "unknown";
+    td.appendChild(el("span", m === "yes" ? "yes" : m === "no" ? "no" : "unk", m === "yes" ? "✓ yes" : m === "no" ? "✗ no" : "? not stated"));
+  });
+  table.append(thead, tbody); wrap.appendChild(table);
+  chat.appendChild(wrap); chat.scrollTop = chat.scrollHeight;
+}
+
+function addOptions(options) {
+  if (!options || !options.length) return;
+  const wrap = el("div", "opts");
+  for (const o of options) {
+    const b = el("button", null, o);
+    b.type = "button";
+    b.onclick = () => { if (!send.disabled) ask(o); };
+    wrap.appendChild(b);
+  }
+  chat.appendChild(wrap); chat.scrollTop = chat.scrollHeight;
+}
+function addMemoryNote(mem) {
+  if (!mem) return;
+  const parts = [];
+  if (mem.recalled && mem.recalled.length) parts.push("🧠 Remembered: " + mem.recalled.join("; "));
+  if (mem.saved && mem.saved.length) parts.push("💾 " + mem.saved.join("; "));
+  if (parts.length) chat.appendChild(el("div", "memnote", parts.join("  ·  ")));
+}
+async function showMemory() {
+  const open = document.querySelector(".memlist");
+  if (open) { open.remove(); return; }
+  const r = await fetch("/memories?user_id=" + encodeURIComponent(userId));
+  const list = await r.json();
+  const box = el("div", "memlist");
+  if (!list.length) box.appendChild(el("div", null, "I haven't saved anything about you yet."));
+  for (const m of list) {
+    const row = el("div"); row.appendChild(el("span", null, `${m.text} (${m.category})`));
+    const x = el("button", null, "forget"); x.onclick = async () => {
+      await fetch(`/memories/${m.key}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" }); row.remove(); };
+    row.appendChild(x); box.appendChild(row);
+  }
+  chat.appendChild(box); chat.scrollTop = chat.scrollHeight;
+}
+document.getElementById("mem").onclick = showMemory;
+function greet() { add("Hey! I'm Barney 👋 Tell me what you're hoping to buy. I'll ask a few quick questions so I can find the one that's right for you.", "lily"); }
+
+// Replay the saved conversation. Option buttons only make sense on the last reply, so only that one gets them.
+async function restore() {
+  await loadWishlist();
+  try {
+    const r = await fetch(`/history?thread_id=${encodeURIComponent(threadId)}&user_id=${encodeURIComponent(userId)}`);
+    const turns = await r.json();
+    if (!Array.isArray(turns) || !turns.length) return greet();
+    turns.forEach((t, i) => {
+      if (t.role === "user") return add(t.content, "user");
+      add(t.content, "lily"); addCards(t.products); addTable(t.table);
+      if (i === turns.length - 1) addOptions(t.options);
+    });
+  } catch { greet(); }
+}
+restore();
+
+document.getElementById("new").onclick = () => {
+  threadId = newId();
+  try { localStorage.setItem("barney_thread", threadId); } catch {}
+  chat.innerHTML = ""; greet(); input.focus();
+};
+
+form.onsubmit = (e) => {
+  e.preventDefault();
+  const text = input.value.trim(); if (text) ask(text);
+};
+
+async function ask(text) {
+  input.value = ""; send.disabled = true;
+  document.querySelectorAll(".opts").forEach((o) => o.remove());
+  add(text, "user");
+  const typing = add("Barney is thinking...", "lily"); typing.classList.add("typing");
+  try {
+    const r = await fetch("/chat", { method:"POST", headers:{ "Content-Type":"application/json" },
+                                     body: JSON.stringify({ message:text, thread_id:threadId, user_id:userId }) });
+    const data = await r.json();
+    typing.remove(); add(data.reply, "lily"); addCards(data.products); addTable(data.table); addOptions(data.options);
+  } catch { typing.remove(); add("I couldn't reach the server. Is it running?", "lily"); }
+  send.disabled = false; input.focus();
+}
+</script>
+</body>
+</html>

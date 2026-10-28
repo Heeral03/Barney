@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* Barney: white, warm and quiet. One serif for headlines, one sans for everything else. */
+:root {
+  --paper: #fdfcfa;
+  --sidebar: #faf8f5;
+  --card: #ffffff;
+  --line: #ece8e1;
+  --line-strong: #ddd8cf;
+  --ink: #161513;
+  --muted: #6f6b64;
+  --faint: #9a958c;
+  --tint: #f3f0ea;
+  --sage-bg: #e8f1e9;
+  --sage-ink: #2f6a3d;
+  --amber: #e8a317;
+  --danger: #b4443a;
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-sidebar: var(--sidebar);
+  --color-card: var(--card);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-tint: var(--tint);
+  --color-sage-bg: var(--sage-bg);
+  --color-sage-ink: var(--sage-ink);
+  --color-amber: var(--amber);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-newsreader), ui-serif, Georgia, serif;
+}
+
+html {
+  background: var(--paper);
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: #e9e3d8;
+}
+
+/* quiet scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.rise { animation: rise 0.35s ease both; }
+
+@keyframes pulse-dot {
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
+}
+.dot { animation: pulse-dot 1.2s infinite ease-in-out; }
+.dot:nth-child(2) { animation-delay: 0.15s; }
+.dot:nth-child(3) { animation-delay: 0.3s; }

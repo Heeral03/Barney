@@ -1,0 +1,23 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# local databases (user data)
+*.db
+*.db-shm
+*.db-wal
+
+# node / next
+node_modules/
+.next/
+*.tsbuildinfo
+
+# misc
+.DS_Store
