@@ -1,0 +1,30 @@
+{
+  "model_year_extraction": {
+    "titles": 30,
+    "accuracy": 0.933,
+    "year_recall": 1.0,
+    "false_positive_rate": 0.2,
+    "wrong": [
+      {
+        "title": "Prestige Induction Cooktop 2000W Sale ₹2,024 only",
+        "expected": null,
+        "got": 2000
+      },
+      {
+        "title": "Pack of 2024 sheets A4 Paper 75 GSM",
+        "expected": null,
+        "got": 2024
+      }
+    ]
+  },
+  "curator_filters": {
+    "listings_to_catch": 10,
+    "caught": 10,
+    "recall": 1.0,
+    "good_listings": 19,
+    "good_kept": 19,
+    "good_kept_rate": 1.0,
+    "misses": []
+  },
+  "today": "2026-10-29"
+}
