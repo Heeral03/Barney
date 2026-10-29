@@ -6,6 +6,8 @@ from langchain_core.messages import SystemMessage
 from pydantic import BaseModel, field_validator
 
 from app import pricing
+from app import timing
+from app.notes import annotate
 from app.agents.common import matched_on_text, remembered_text, reply, requirements_text
 from app.commands import ACCEPT, BROADEN, CHANGE, COMPARE, RAISE_BUDGET, RESTART, SHOW_ALTERNATIVES
 from app.llm import Structured, load_prompt
@@ -161,6 +163,9 @@ def present_node(state: chatState) -> chatState:
                  f"{inr(best['price_inr'] - cap)} over._")
     elif rec.watch_out:
         text += f"\n\n_Heads up: {rec.watch_out}_"
+    wait = timing.advice(profile.get("product") or "")
+    if wait:
+        text += f"\n\n_Worth waiting? {wait}_"
     if source == "web":
         text += "\n\n_I found these through a general web search, so please confirm the price and size on the page._"
     text += f"\n\n{rec.follow_up or 'Want to see a few other options too?'}"
@@ -168,7 +173,7 @@ def present_node(state: chatState) -> chatState:
     options = [*rec.follow_up_options[:3], SHOW_ALTERNATIVES, *([COMPARE] if len(offers) > 1 else []), ACCEPT[0]]
     if best.get("over_budget"):
         options.insert(0, f"{RAISE_BUDGET}{inr(best['price_inr'])}")
-    return reply(text, options, cards=[{**best, "best": True}], profile=profile,
+    return reply(text, options, cards=annotate([{**best, "best": True}], profile), profile=profile,
                  offers=_merge(offers, [*ready, best]), shown=[best["number"]])
 
 
@@ -205,7 +210,7 @@ def more_node(state: chatState) -> chatState:
     shown |= {o["number"] for o in batch}
     options = [SHOW_ALTERNATIVES, COMPARE, ACCEPT[1]] if reserve or any(o["number"] not in shown for o in offers) \
         else [BROADEN, COMPARE, ACCEPT[1]]
-    return reply(text, options, cards=batch, profile=profile, offers=offers, reserve=reserve, shown=sorted(shown),
+    return reply(text, options, cards=annotate(batch, profile), profile=profile, offers=offers, reserve=reserve, shown=sorted(shown),
                  route="end")  # "end" matters: after a fresh search `route` is still "research" and would loop back
 
 

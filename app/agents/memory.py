@@ -29,7 +29,7 @@ from app.commands import ACCEPT, is_command
 from app.llm import llm, load_prompt
 from app.memory import store as ltm
 from app.memory import writer
-from app import wishlist
+from app import settings, wishlist
 from app.state import chatState
 
 log = logging.getLogger(__name__)
@@ -45,15 +45,20 @@ def _user_id(config: RunnableConfig) -> str:
     return (config.get("configurable") or {}).get("user_id") or "anonymous"
 
 
+def _memory_id(config: RunnableConfig) -> str:
+    """Whose tastes this conversation reads and writes: the account's, or one of its profiles ("Mom", "Gift for Riya")."""
+    return (config.get("configurable") or {}).get("memory_id") or _user_id(config)
+
+
 # ------------------------------------------------------------------ before: long-term -> short-term
 def recall_node(state: chatState, config: RunnableConfig, *, store: BaseStore) -> chatState:
     said = last_user_text(state["messages"])
     if not said or is_command(said):
         return {"fresh": [], "saved": []}  # a button press says nothing new; keep what was loaded earlier
     product = (state.get("profile") or {}).get("product") or ""
-    uid = _user_id(config)
+    uid, mid = _user_id(config), _memory_id(config)
     try:
-        hits = ltm.recall(store, uid, f"{product.replace('_', ' ')} {said}".strip()) + ltm.about_the_person(store, uid)
+        hits = ltm.recall(store, mid, f"{product.replace('_', ' ')} {said}".strip()) + ltm.about_the_person(store, mid)
     except Exception as e:
         log.warning("memory recall failed: %s", e)
         hits = []
@@ -91,7 +96,9 @@ def commit_node(state: chatState, config: RunnableConfig, *, store: BaseStore) -
     elif not is_command(said):
         items = (state.get("plan") or {}).get("remember") or []
     try:
-        events = writer.save(store, _user_id(config), items)
+        if not settings.learning_on(_user_id(config)):  # the shopper paused learning
+            return {"saved": []}
+        events = writer.save(store, _memory_id(config), items, source="inferred" if said in ACCEPT else "said")
     except Exception as e:  # includes Groq rate limits: skip saving this turn, don't fail the chat
         log.warning("memory commit failed: %s", e)
         return {}

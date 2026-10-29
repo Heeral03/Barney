@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Inter, Newsreader } from "next/font/google";
-import { Shell } from "@/components/Shell";
 import "./globals.css";
 
 const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
@@ -11,12 +10,10 @@ export const metadata: Metadata = {
   description: "Your wingman for buying things. Barney finds the options, compares the prices, and picks the one that’s actually awesome.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${newsreader.variable} h-full`}>
-      <body className="min-h-full">
-        <Shell>{children}</Shell>
-      </body>
+      <body className="min-h-full">{children}</body>
     </html>
   );
 }

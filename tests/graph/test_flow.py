@@ -1,3 +1,4 @@
+from datetime import date
 import threading
 import time
 
@@ -43,7 +44,7 @@ def stubs(monkeypatch):
     def shopping(query):
         calls["shopping"].append(query)
         calls["threads"].add(threading.get_ident())
-        time.sleep(0.3)  # a real search takes a while; parallel workers overlap this
+        time.sleep(0.5)  # a real search takes a while; parallel workers overlap this
         return [{"title": t, "price_inr": p, "price_display": f"₹{p}", "seller": "Shop", "rating": r,
                  "rating_count": c, "api": "google_shopping", "rank": i} for i, (t, p, r, c) in enumerate(CATALOG.get(query, []))]
 
@@ -68,9 +69,9 @@ def stubs(monkeypatch):
     return calls, plans
 
 
-def chat(thread_id, user_id, text):
+def chat(thread_id, user_id, text, answers=None):
     cfg = {"configurable": {"thread_id": thread_id, "user_id": user_id}, "recursion_limit": 25}
-    return chatbot.invoke({"messages": [HumanMessage(content=text)]}, config=cfg), cfg
+    return chatbot.invoke({"messages": [HumanMessage(content=text)], "answers": answers or {}, "form": None}, config=cfg), cfg
 
 
 def test_search_first_then_more_options_then_accept(stubs, thread_id, user_id):
@@ -82,7 +83,7 @@ def test_search_first_then_more_options_then_accept(stubs, thread_id, user_id):
                   "remember": [{"text": "Name is Heeral", "category": "person", "kind": "profile"}]})
     started = time.monotonic()
     out, cfg = chat(thread_id, user_id, "Help me buy cool running shoes, I'm Heeral")
-    assert time.monotonic() - started < 0.55, "two 0.3s searches should overlap"
+    assert time.monotonic() - started < 0.95, "two 0.5s searches should overlap (run one after the other they would take over 1s)"
     assert len(calls["threads"]) == 2
     reply = out["messages"][-1].content
     assert reply.startswith("Found a solid women's stability runner") and "Want something lighter" in reply
@@ -160,10 +161,11 @@ def test_fallback_wave_runs_when_first_wave_is_thin(stubs, thread_id, user_id, m
     monkeypatch.setattr(researcher, "tavily_search", lambda q: tavily_calls.append(q) or [{
         "title": "Tavily Find", "price_inr": 1000, "price_display": "₹1,000", "seller": "amazon.in", "rating": None,
         "rating_count": None, "api": "tavily", "link": "https://amazon.in/x", "rank": 0}])
-    monkeypatch.setitem(CATALOG, "obscure", [shoe("Only One", 1000, 4.0, 10)])
+    monkeypatch.setitem(CATALOG, f"obscure {date.today().year}", [shoe("Only One", 1000, 4.0, 10)])
     plans.append({"decision": "search", "product": "laptop", "queries": ["obscure"]})
     out, _ = chat(thread_id, user_id, "find me an obscure thing")
-    assert web_calls == ["obscure"] and tavily_calls == ["obscure"] and "laptop" in calls["shopping"]  # web: the specific query
+    year = date.today().year  # laptops are searched as "<query> <this year>"
+    assert web_calls == [f"obscure {year}"] and tavily_calls == [f"obscure {year}"] and "laptop" in calls["shopping"]  # web: the specific query
     assert {o["title"] for o in out["offers"]} == {"Only One", "Tavily Find", "Alpha Dev 16GB"}
 
 
@@ -197,46 +199,55 @@ OCCASION = {"topic": "occasion", "question": "What are they for?", "options": ["
 BUDGET = {"topic": "budget", "question": "What's your budget?", "options": ["Under ₹1,000", "₹1,000 to ₹2,000"]}
 
 
-def test_it_understands_the_shopper_before_showing_anything(stubs, thread_id, user_id, monkeypatch):
+def test_it_asks_one_questionnaire_then_searches_with_every_answer(stubs, thread_id, user_id, monkeypatch):
     calls, plans = stubs
     monkeypatch.setitem(CATALOG, "women straight jeans", JEANS)
 
-    # 1. "jeans": one model call writes the question plan, then the app asks the first question
+    # 1. "jeans": one model call writes the question plan, and the app asks all of it at once
     plans.append({"decision": "ask", "product": "jeans", "message": "Jeans, great!", "facts": [{"topic": "gender", "value": "women"}],
                   "attributes": [FIT, COLOUR, OCCASION, BUDGET]})
     out, _ = chat(thread_id, user_id, "I want some jeans for women")
-    assert "**What kind of fit do you like?**" in out["messages"][-1].content and calls["shopping"] == []
-    assert out["options"] == ["Straight", "Skinny", "Wide-leg", "Not sure, you suggest"]
+    assert calls["shopping"] == [] and out["options"] == []
+    assert [q["topic"] for q in out["form"]["questions"]] == ["fit", "colour", "occasion", "budget"]
+    assert out["form"]["questions"][0]["options"] == ["Straight", "Skinny", "Wide-leg"]
 
-    # 2-3. tapped answers: no model call at all, the next question comes straight back
-    decider_calls = len(calls["decider_saw"])
-    out, _ = chat(thread_id, user_id, "Straight")
-    assert "**Which colour or wash?**" in out["messages"][-1].content and out["options"][-1] == "Just show me options"
-    assert out["saved"] == ["Saved: Fit preference for jeans: Straight"]  # a lasting taste is remembered
-    out, _ = chat(thread_id, user_id, "Dark blue")
-    assert "**What are they for?**" in out["messages"][-1].content
-    assert len(calls["decider_saw"]) == decider_calls, "tapped answers must not call the model"
-    out, _ = chat(thread_id, user_id, "Office")
-    assert "**What's your budget?**" in out["messages"][-1].content and out["saved"] == []  # an occasion is not a lasting taste
-
-    # 4. the last answer: the model now writes the search, with everything learned in its context
+    # 2. the submitted form (several answers per question, and one written by the shopper): one model call writes the search
     plans.append({"decision": "search", "queries": ["women straight jeans"]})
-    out, _ = chat(thread_id, user_id, "Under ₹1,000")
-    assert len(calls["decider_saw"]) == decider_calls + 1
+    decider_calls = len(calls["decider_saw"])
+    answers = {"fit": ["Straight", "Wide-leg"], "colour": ["Dark blue", "Black"], "occasion": ["Office", "Weddings"], "budget": ["Under ₹1,000"]}
+    out, _ = chat(thread_id, user_id, "Fit: Straight, Wide-leg · Colour: Dark blue, Black", answers)
+    assert len(calls["decider_saw"]) == decider_calls + 1 and out["form"] is None
     seen = calls["decider_saw"][-1]
-    assert "fit: answered (Straight)" in seen and "occasion: answered (Office)" in seen and "Budget: 0 to 1000" in seen
+    assert "fit: answered (Straight, Wide-leg)" in seen and "occasion: answered (Office, Weddings)" in seen and "Budget: 0 to 1000" in seen
+    assert "Today's date:" in seen
     assert out["profile"]["budget_max"] == 1000 and out["cards"][0]["best"] and all(o["price_inr"] <= 1000 for o in out["offers"])
     texts = {m["text"] for m in ltm_store.all_memories(ltm_store.ltm, user_id)}
-    assert {"Fit preference for jeans: Straight", "Colour preference for jeans: Dark blue"} <= texts
+    assert {"Fit preference for jeans: Straight, Wide-leg", "Colour preference for jeans: Dark blue, Black"} <= texts
     assert not any("Office" in t or "1,000" in t for t in texts)
 
 
-def test_just_show_me_skips_the_remaining_questions(stubs, thread_id, user_id, monkeypatch):
+def test_it_uses_what_it_remembers_and_only_asks_the_rest(stubs, thread_id, user_id, monkeypatch):
+    calls, plans = stubs
+    ltm_store.remember(ltm_store.ltm, user_id, "Fit preference for jeans: Straight", "jeans", key="pref:jeans:fit")
+    ltm_store.remember(ltm_store.ltm, user_id, "Colour preference for jeans: Dark blue", "jeans", key="pref:jeans:color")
+    plans.append({"decision": "ask", "product": "jeans", "attributes": [FIT, COLOUR, OCCASION, BUDGET]})
+    out, _ = chat(thread_id, user_id, "I want jeans")
+    assert [q["topic"] for q in out["form"]["questions"]] == ["occasion", "budget"]  # fit and colour are already known
+    assert "I'm using it" in out["messages"][-1].content and "**Fit:** Straight" in out["messages"][-1].content
+    assert out["profile"]["facts"]["fit"] == "Straight" and out["profile"]["facts"]["colour"] == "Dark blue"
+
+    plans.append({"decision": "search", "queries": ["women straight jeans"]})
+    monkeypatch.setitem(CATALOG, "women straight jeans", JEANS)
+    chat(thread_id, user_id, "Occasion: Office", {"occasion": ["Office"], "budget": ["Under ₹1,000"]})
+    assert "fit: answered (Straight)" in calls["decider_saw"][-1]  # the search is written knowing their taste
+
+
+def test_just_show_me_skips_the_questionnaire(stubs, thread_id, user_id, monkeypatch):
     calls, plans = stubs
     monkeypatch.setitem(CATALOG, "women straight jeans", JEANS)
     plans.append({"decision": "ask", "product": "jeans", "attributes": [FIT, COLOUR, OCCASION, BUDGET]})
-    chat(thread_id, user_id, "jeans")
-    chat(thread_id, user_id, "Straight")
+    first, _ = chat(thread_id, user_id, "jeans")
+    assert first["form"]
     plans.append({"decision": "ask", "queries": ["women straight jeans"]})  # even if the model keeps asking
     out, _ = chat(thread_id, user_id, "Just show me options")
     assert out["cards"] and out["cards"][0]["best"] and calls["shopping"]

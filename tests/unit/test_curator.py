@@ -67,3 +67,74 @@ def test_more_mode_appends_new_listings_and_skips_ones_already_found():
     new_titles = [o["title"] for o in out["offers"][2:]]
     assert "Alpha" not in new_titles and "Gamma" not in new_titles and len(new_titles) == curator.MORE_BATCH
     assert "shown" not in out  # what was already shown stays shown
+
+
+def test_old_model_years_are_dropped_unless_asked_for():
+    from app.agents.curator import _latest
+
+    def offer(t):
+        return {"title": t}
+    offers = [offer("HP Laptop 2019"), offer("Dell XPS 2026"), offer("Lenovo 2025 Edition"), offer("Asus Zenbook"), offer("Acer 2024")]
+    kept = [o["title"] for o in _latest(offers, {}, ["laptop"])]
+    assert "HP Laptop 2019" not in kept and len(kept) == 4
+    assert len(_latest(offers, {}, ["refurbished laptop"])) == 5
+    assert len(_latest(offers, {"facts": {"model": "2019"}}, ["laptop"])) == 5
+    assert len(_latest(offers[:2], {}, ["laptop"])) == 2  # never empties the list
+
+
+def test_old_generations_are_recognised_from_the_chip_not_just_a_year():
+    from app.agents.curator import _latest
+    from app.freshness import model_year
+
+    assert model_year("Lenovo Yoga Slim 7 Intel Core i7 13th Gen 1360p") == 2023
+    assert model_year("MSI Prestige 13 Evo i7-1360P") == 2023
+    assert model_year("Lenovo 83DV i7-13650HX") == 2023
+    assert model_year("Apple MacBook Air M1") == 2020 and model_year("Apple MacBook Air 13 M4") == 2024
+    assert model_year("iPhone 15 128GB") == 2023 and model_year("Samsung Galaxy S24") == 2024
+    assert model_year("Dell XPS Intel Core Ultra 7 256V") is None and model_year("Levi's 511 Jeans") is None
+    titles = ["Lenovo i7 13th Gen", "MSI i7-1360P", "Apple MacBook Air M1", "Dell XPS Core Ultra 7", "Apple MacBook Air M4", "HP Spectre Core Ultra 9"]
+    kept = [o["title"] for o in _latest([{"title": t} for t in titles], {}, ["laptop"])]
+    assert kept == ["Dell XPS Core Ultra 7", "Apple MacBook Air M4", "HP Spectre Core Ultra 9"]
+
+
+def test_lead_search_for_yearly_products_carries_the_current_year():
+    from datetime import date
+
+    from app.freshness import with_current_year
+
+    y = date.today().year
+    assert with_current_year("laptop", ["laptop 32GB RAM", "thin laptop"]) == [f"laptop 32GB RAM {y}", "thin laptop"]
+    assert with_current_year("laptop", ["laptop 2024"]) == ["laptop 2024"]
+    assert with_current_year("laptop", ["laptop i7 13th gen"]) == ["laptop i7 13th gen"]
+    assert with_current_year("laptop", ["refurbished laptop"]) == ["refurbished laptop"]
+    assert with_current_year("jeans", ["women straight jeans"]) == ["women straight jeans"]
+
+
+def test_legacy_plugs_count_as_old_and_a_named_plug_filters_the_rest():
+    from app.agents.curator import _compatible, _latest
+    from app.freshness import model_year
+
+    assert model_year("Apple EarPods with Lightning Connector") == 2022
+    assert model_year("Apple EarPods with 3.5mm Headphone Plug") == 2016
+    assert model_year("Apple EarPods (USB-C) For iPhone 15") is None
+    titles = ["Apple EarPods Lightning", "Apple EarPods 3.5mm", "Apple EarPods (USB-C)", "Sony IER-EX15C Type C Headphones",
+              "Sennheiser CX 80u", "Xiaomi Type-C Earphones"]
+    offers = [{"title": t} for t in titles]
+    assert [o["title"] for o in _latest(offers, {}, ["headphones"])] == titles[2:]
+    usbc = {"facts": {"connector": "USB-C"}}
+    kept = [o["title"] for o in _compatible(offers, usbc, ["usb-c wired earphones"])]
+    assert kept == ["Apple EarPods (USB-C)", "Sony IER-EX15C Type C Headphones", "Sennheiser CX 80u", "Xiaomi Type-C Earphones"]
+    assert len(_compatible(offers, {"facts": {"connector": "USB-C or Lightning"}}, [])) == 6  # two acceptable: nothing enforced
+
+
+def test_junk_listings_are_dropped_but_a_thin_result_is_kept():
+    from app.agents.curator import _trustworthy
+
+    def o(title, price, rating=None, count=None, seller="Flipkart"):
+        return {"title": title, "price_inr": price, "rating": rating, "rating_count": count, "seller": seller}
+    offers = [o("EarPods", 1500, 4.5, 900), o("EarPods USB-C", 1650, 4.6, 25000), o("Sony Type-C", 1290, 4.6, 1300),
+              o("Sennheiser CX", 1790, 4.2, 57), o("AirPods Pro TWS", 234, 4.4, 4300, "Digihaat"), o("USB-C earphones", 79, None, None, "Amazon.in"),
+              o("Noname", 1400, None, None, "randomshop.xyz")]
+    kept = [x["title"] for x in _trustworthy(offers)]
+    assert kept == ["EarPods", "EarPods USB-C", "Sony Type-C", "Sennheiser CX"]  # cheap fakes and an unrated unknown seller are out
+    assert len(_trustworthy(offers[:2] + offers[6:])) == 3  # too little would be left after filtering: keep all

@@ -49,7 +49,11 @@ class chatState(TypedDict, total=False):
     wishlist: list[dict]
     # The side-by-side comparison shown this turn (None otherwise): normalized specs, how each option matches the shopper's needs.
     table: Optional[dict]
+    # The shopper's submitted questionnaire for this turn: {topic: [chosen values]}. Input only; reset every turn.
+    answers: dict
     # Per-turn output for the UI. Overwritten on every turn.
+    # `form` is the questionnaire to show: {"questions": [{"topic", "question", "options"}]}, or None.
+    form: Optional[dict]
     options: list[str]
     cards: list[dict]
     route: Optional[str]

@@ -41,7 +41,7 @@ def about_the_person(store: BaseStore, user_id: str, k: int = 4) -> list[dict]:
 
 
 def remember(store: BaseStore, user_id: str, text: str, category: str = "general", kind: str = "preference",
-             key: str | None = None) -> tuple[str, str]:
+             key: str | None = None, source: str = "said") -> tuple[str, str]:
     """Save a memory, or update the existing one if it is the same fact. Returns ("added" | "updated" | "unchanged", key)."""
     search_text = f"{category}: {text}"
     now = time.time()
@@ -50,7 +50,7 @@ def remember(store: BaseStore, user_id: str, text: str, category: str = "general
         if old and old.value.get("text", "").strip().lower() == text.strip().lower():
             return "unchanged", key
         store.put(_ns(user_id), key, {
-            "text": text, "category": category, "kind": kind, "search_text": search_text,
+            "text": text, "category": category, "kind": kind, "search_text": search_text, "source": source,
             "created_at": old.value.get("created_at", now) if old else now, "updated_at": now,
             "revisions": old.value.get("revisions", 0) + 1 if old else 0,
         })
@@ -61,13 +61,13 @@ def remember(store: BaseStore, user_id: str, text: str, category: str = "general
         if old.value.get("text", "").strip().lower() == text.strip().lower():
             return "unchanged", old.key  # already known: no write, nothing to report
         store.put(_ns(user_id), old.key, {
-            **old.value, "text": text, "category": category, "kind": kind, "search_text": search_text,
+            **old.value, "text": text, "category": category, "kind": kind, "search_text": search_text, "source": source,
             "updated_at": now, "revisions": old.value.get("revisions", 0) + 1,
         })
         return "updated", old.key
     key = uuid.uuid4().hex
     store.put(_ns(user_id), key, {
-        "text": text, "category": category, "kind": kind, "search_text": search_text,
+        "text": text, "category": category, "kind": kind, "search_text": search_text, "source": source,
         "created_at": now, "updated_at": now, "revisions": 0,
     })
     return "added", key
@@ -76,6 +76,17 @@ def remember(store: BaseStore, user_id: str, text: str, category: str = "general
 def all_memories(store: BaseStore, user_id: str) -> list[dict]:
     items = store.search(_ns(user_id), limit=200)
     return sorted(({"key": i.key, **i.value} for i in items), key=lambda m: -m.get("updated_at", 0))
+
+
+def edit(store: BaseStore, user_id: str, key: str, text: str) -> bool:
+    """Reword a memory. What the shopper writes themselves counts as said, whatever it was before."""
+    old = store.get(_ns(user_id), key)
+    text = " ".join((text or "").split())[:140]
+    if not old or len(text.split()) < 2:
+        return False
+    store.put(_ns(user_id), key, {**old.value, "text": text, "search_text": f"{old.value.get('category', 'general')}: {text}",
+                                  "source": "said", "updated_at": time.time(), "revisions": old.value.get("revisions", 0) + 1})
+    return True
 
 
 def forget(store: BaseStore, user_id: str, key: str) -> None:

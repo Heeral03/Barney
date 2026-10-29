@@ -34,6 +34,7 @@ psycopg-binary==3.3.6
 psycopg-pool==3.3.3
 pydantic==2.14.1
 pydantic_core==2.50.1
+PyJWT==2.15.1
 pytest==9.2.0
 python-dotenv==1.2.4
 PyYAML==6.0.3

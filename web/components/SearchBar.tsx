@@ -36,7 +36,7 @@ export function SearchBar() {
     const message = text.trim();
     if (!message || sending) return;
     setText("");
-    if (path !== "/") router.push("/");
+    if (path !== "/app") router.push("/app");
     send(message);
   }
 

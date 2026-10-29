@@ -64,3 +64,37 @@ def no_paid_apis(monkeypatch):
 
     monkeypatch.setattr(serpapi, "available", lambda: False)
     monkeypatch.setattr(serpapi, "searches_left", lambda: None)
+
+
+SECRET = "test-secret-for-barney-backend-tokens-0123456789"
+
+
+@pytest.fixture(autouse=True)
+def backend_secret(monkeypatch):
+    monkeypatch.setenv("BACKEND_JWT_SECRET", SECRET)
+
+
+def token_for(sub: str, secret: str = SECRET, ttl: int = 120, **claims) -> str:
+    """What the web app signs for each request it forwards."""
+    import time
+
+    import jwt
+
+    now = int(time.time())
+    return jwt.encode({"sub": sub, "iss": "barney-web", "aud": "barney-api", "iat": now, "exp": now + ttl, **claims}, secret, algorithm="HS256")
+
+
+def client_for(sub: str):
+    """A test client that is signed in as `sub` ("google:..." or "guest:...")."""
+    from fastapi.testclient import TestClient
+
+    import app.api.main as api
+
+    return TestClient(api.app, headers={"Authorization": f"Bearer {token_for(sub)}"})
+
+
+@pytest.fixture(autouse=True)
+def fresh_price_cache():
+    import app.pricing as pricing
+
+    pricing._cache.clear()

@@ -10,6 +10,19 @@ uvicorn app.api.main:app --reload      # then open http://localhost:8000
 pytest                                 # needs the Postgres above; no LLM or search keys needed
 ```
 
+## Sign-in (Google)
+
+The browser never says who it is. The Next.js app (`web/`) holds the Google sign-in session and signs a short-lived token for every
+request it forwards to the API; the API (`app/auth.py`) only trusts that token. Visitors who have not signed in get a random
+guest id in an httpOnly cookie, and everything they did is moved to their account the first time they sign in
+(`POST /me/claim-guest`, `app/accounts.py`).
+
+1. Google Cloud Console -> APIs & Services -> Credentials -> Create OAuth client ID (Web). Authorised JavaScript origin
+   `http://localhost:3000`; redirect URI `http://localhost:3000/api/auth/callback/google`.
+2. `cp web/.env.example web/.env.local` and fill in `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`.
+3. Put the same `BACKEND_JWT_SECRET` (32+ characters, `openssl rand -base64 48`) in `web/.env.local` and in this folder's `.env`.
+   The API answers 503 without it, on purpose.
+
 `.env` needs `GROQ_API_KEY` and `SERPAPI_API_KEY` (`SERPKITE_API_KEY` is the second shopping source); `TAVILY_API_KEY` enables the web fallback. `DATABASE_URL` defaults to `postgresql://lily:lily@localhost:5433/lily`.
 Tables are created on first start.
 

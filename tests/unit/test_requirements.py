@@ -135,3 +135,28 @@ def test_a_rate_limit_is_not_swallowed(monkeypatch):
     import pytest
     with pytest.raises(RateLimitError):
         req.requirements_node({"messages": [HumanMessage(content="I want a pair of jeans")]})
+
+
+def test_a_submitted_questionnaire_is_recorded_at_once():
+    from app.agents.requirements import record_form
+
+    pending = {"form": True, "questions": [
+        {"topic": "fit", "options": [], "durable": True}, {"topic": "budget", "options": [], "durable": False},
+        {"topic": "occasion", "options": [], "durable": False}]}
+    answers = {"fit": ["Straight", "Skinny"], "budget": ["Under ₹1,000", "₹1,000 to ₹2,000"], "occasion": ["Office", "my cousin's wedding"]}
+    profile, kept = record_form({"product": "jeans", "pending": pending}, answers)
+    assert "pending" not in profile
+    assert profile["facts"] == {"fit": "Straight, Skinny", "occasion": "Office, my cousin's wedding"}
+    assert profile["budget_max"] == 2000
+    assert [m["key"] for m in kept] == ["pref:jeans:fit"]  # only the lasting taste is remembered
+
+
+def test_earlier_answers_for_this_kind_of_product_are_applied_not_asked_again():
+    from app.agents.requirements import prefill_from_memory
+
+    attrs = [{"topic": "fit", "question": "?", "options": []}, {"topic": "colour", "question": "?", "options": []},
+             {"topic": "budget", "question": "?", "options": []}]
+    profile = prefill_from_memory({"product": "jeans", "attrs": attrs, "facts": {"colour": "red"}},
+                                  {"fit": "Straight", "color": "Dark blue", "size": "30"})
+    assert profile["facts"] == {"colour": "red", "fit": "Straight"}  # what they say now wins; an unknown slot is ignored
+    assert profile["from_memory"] == {"fit": "Straight"} and profile["prefilled"] is True

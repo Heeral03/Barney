@@ -10,6 +10,8 @@ The same product is often listed at very different prices (₹375 on one store, 
 """
 import logging
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
@@ -44,7 +46,29 @@ def _host(url: str) -> str:
     return urlparse(url).netloc.lower().removeprefix("www.")
 
 
+_CACHE_SECONDS = 1800  # the same listing is not looked up (a SerpAPI call plus page reads) again within half an hour
+_cache: dict[str, tuple[float, dict]] = {}
+_cache_lock = threading.Lock()
+
+
 def compare(token: str) -> dict:
+    """{"stores": [...], "cheapest": ..., "checked_at": epoch seconds}. Remembered for half an hour. Never raises."""
+    now = time.time()
+    with _cache_lock:
+        hit = _cache.get(token)
+        if hit and now - hit[0] < _CACHE_SECONDS:
+            return hit[1]
+    info = _compare(token)
+    if info.get("stores"):
+        info = {**info, "checked_at": now}
+        with _cache_lock:
+            if len(_cache) > 500:
+                _cache.pop(min(_cache, key=lambda k: _cache[k][0]))
+            _cache[token] = (now, info)
+    return info
+
+
+def _compare(token: str) -> dict:
     """{"stores": [...cheapest first...], "cheapest": the store to buy from, or None}. Never raises."""
     if not serpapi.available():
         return {"stores": [], "cheapest": None}
@@ -65,7 +89,8 @@ def compare(token: str) -> dict:
         if abs(page - store["price_inr"]) <= MATCH * store["price_inr"]:
             store["verified"] = True
         else:  # the website shows a different price than the listing: the website is right
-            store.update(listed_price_inr=store["price_inr"], price_inr=page, price_display=inr(page), verified="corrected")
+            store.update(listed_price_inr=store["price_inr"], price_inr=page, price_display=inr(page), verified="corrected",
+                         total_inr=page if store.get("shipping") in (None, "", "Free") else None)  # the old total no longer holds
     stores.sort(key=lambda r: r["price_inr"])
     cheapest = next((s for s in stores if s["trusted"]), None)
     return {"stores": stores, "cheapest": cheapest}
@@ -76,8 +101,8 @@ def apply_to_offer(offer: dict, info: dict) -> dict:
     stores, cheapest = info.get("stores") or [], info.get("cheapest")
     if not stores:
         return offer
-    slim = [{k: s.get(k) for k in ("name", "price_inr", "price_display", "link", "trusted", "verified", "tag")} for s in stores]
-    update = {"stores": slim}
+    slim = [{k: s.get(k) for k in ("name", "price_inr", "price_display", "link", "trusted", "verified", "tag", "shipping", "total_inr", "delivery", "offers")} for s in stores]
+    update = {"stores": slim, "checked_at": info.get("checked_at")}
     buy = cheapest or stores[0]  # no reliable store: still link the seller's own page, but flag it
     update.update(price_inr=buy["price_inr"], price_display=buy["price_display"] or inr(buy["price_inr"]),
                   seller=buy["name"], link=buy["link"], link_domain=_host(buy["link"]),
@@ -94,7 +119,7 @@ def comparison_text(stores: list[dict] | None) -> str:
     if stores[0]["price_inr"] == stores[-1]["price_inr"]:
         return f"**Same price on every store I checked** ({inr(stores[0]['price_inr'])})."
     best = next((s for s in stores if s.get("trusted")), None)
-    lines = ["**Prices differ across stores.**"]
+    lines = [f"**Prices differ across stores.** I found this exact product at {len(stores)} stores, from {inr(stores[0]['price_inr'])} to {inr(stores[-1]['price_inr'])}."]
     if not best:
         return "\n".join([*lines, f"Lowest listed: {stores[0]['name']} at {inr(stores[0]['price_inr'])}, a store I can't vouch for, so check it before buying."])
     if best:
@@ -105,7 +130,7 @@ def comparison_text(stores: list[dict] | None) -> str:
         c = cheaper[0]
         why = "a store I can't vouch for" if not c.get("trusted") else "I couldn't confirm it on the page"
         lines.append(f"Listed even lower at {c['name']} ({inr(c['price_inr'])}), but that's {why}, so check it before buying.")
-    others = [s for s in stores if s is not best and s not in cheaper][:3]
+    others = [s for s in stores if s is not best and s not in cheaper][:5]
     if others:
-        lines.append("Also: " + " · ".join(f"{s['name']} {inr(s['price_inr'])}{mark(s)}" for s in others))
+        lines.append("Other stores: " + " · ".join(f"{s['name']} {inr(s['price_inr'])}{mark(s)}" for s in others) + ". Every store is listed on the card so you can choose.")
     return "\n".join(lines)

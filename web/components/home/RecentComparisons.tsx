@@ -10,9 +10,8 @@ import { ArtFor } from "../illustrations";
 import { Img } from "../Img";
 
 export function RecentComparisons() {
-  const { overview, userId, openThread, send } = useBarney();
-  const [loaded, setLoaded] = useState<{ userId: string; cards: ComparisonCard[] } | null>(null);
-  const all = loaded?.userId === userId ? loaded.cards : null;
+  const { overview, openThread, send } = useBarney();
+  const [all, setAll] = useState<ComparisonCard[] | null>(null);
   const cards = all ?? overview?.comparisons ?? [];
   const total = overview?.stats.comparisons ?? 0;
 
@@ -23,7 +22,7 @@ export function RecentComparisons() {
       <div className="flex items-baseline justify-between">
         <h2 className="font-serif text-[22px]">Recent Comparisons</h2>
         {total > 3 && !all && (
-          <button onClick={() => api.comparisons(userId, 12).then((cards) => setLoaded({ userId, cards }))} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-ink">
+          <button onClick={() => api.comparisons(12).then(setAll)} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-ink">
             View all <ArrowRight width={15} height={15} />
           </button>
         )}

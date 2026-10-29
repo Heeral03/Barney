@@ -29,6 +29,13 @@ export function newId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+/** "5 min ago" for a time in epoch seconds. */
+export function ago(epochSeconds: number | null | undefined): string {
+  if (!epochSeconds) return "";
+  const minutes = Math.max(0, Math.floor((Date.now() / 1000 - epochSeconds) / 60));
+  return minutes < 1 ? "just now" : minutes < 60 ? `${minutes} min ago` : minutes < 1440 ? `${Math.floor(minutes / 60)} h ago` : `${Math.floor(minutes / 1440)} d ago`;
+}
+
 /** What a listing is called in the wishlist: its link, else its title. */
 export function wishKey(o: { link?: string | null; title?: string }): string {
   return (o.link || o.title || "").toLowerCase();

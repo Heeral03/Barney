@@ -6,11 +6,14 @@ import { ArrowRight } from "../icons";
 import { ComparisonTable } from "./ComparisonTable";
 import { Markdown } from "./Markdown";
 import { ProductCard } from "./ProductCard";
+import { Questionnaire } from "./Questionnaire";
+import { SkeletonCards, Working } from "./Skeletons";
 
 export function Thread() {
-  const { turns, sending, send, newChat } = useBarney();
+  const { turns, sending, send, newChat, progress } = useBarney();
   const end = useRef<HTMLDivElement>(null);
   const lastAssistant = turns.map((t) => t.role).lastIndexOf("assistant");
+  const wantsCompare = !!turns[lastAssistant]?.options?.includes("Compare these side by side");
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -40,7 +43,9 @@ export function Thread() {
                 </div>
               )}
 
-              {t.table && <ComparisonTable table={t.table} />}
+              {t.table && <ComparisonTable table={t.table} title={t.table.rows.find((r) => r.best)?.title ?? "Comparison"} />}
+
+              {i === lastAssistant && !sending && t.form && t.form.questions.length > 0 && <Questionnaire form={t.form} />}
 
               {i === lastAssistant && !sending && t.options && t.options.length > 0 && (
                 <div className="flex flex-wrap gap-2.5">
@@ -56,11 +61,20 @@ export function Thread() {
         )}
 
         {sending && (
-          <div className="flex items-center gap-1.5 py-2" aria-label="Barney is thinking">
-            <span className="dot h-1.5 w-1.5 rounded-full bg-ink/60" /><span className="dot h-1.5 w-1.5 rounded-full bg-ink/60" /><span className="dot h-1.5 w-1.5 rounded-full bg-ink/60" />
+          <div className="space-y-5">
+            <Working status={progress.status} preview={progress.preview} />
+            {/searching|picking|finding/i.test(progress.status) && <SkeletonCards count={progress.preview.length ? 1 : 2} />}
           </div>
         )}
         <div ref={end} />
+
+        {!sending && wantsCompare && (
+          <div className="fixed inset-x-0 bottom-[68px] z-30 px-5 md:hidden">
+            <button onClick={() => send("Compare these side by side")} className="w-full rounded-full bg-ink py-3 text-[14.5px] text-white shadow-[0_8px_24px_rgba(0,0,0,0.18)]">
+              Compare these side by side
+            </button>
+          </div>
+        )}
       </div>
     </section>
   );

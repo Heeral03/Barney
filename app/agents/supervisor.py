@@ -11,7 +11,8 @@ proposal (`plan`) and applies the rules that keep the conversation natural and f
 """
 import re
 
-from app.agents.common import last_user_text, next_attribute, reply
+from app.agents.common import answered_topics, last_user_text, next_attribute, reply, topic_key
+from app.freshness import with_current_year
 from app.commands import (
     ACCEPT, BROADEN, CHANGE, MAX_QUESTIONS, MAX_QUESTIONS_BEFORE_RESULTS, NOT_SURE, RAISE_BUDGET, RESTART,
     COMPARE, SHOW_ALTERNATIVES, SKIP,
@@ -20,6 +21,7 @@ from app.state import chatState
 
 
 def _research(profile: dict, queries: list[str], mode: str = "new") -> dict:
+    queries = with_current_year(profile.get("product") or "", queries) if mode != "more" else queries
     return {"profile": profile, "search": {"queries": queries, "mode": mode}, "options": [], "cards": [], "route": "research"}
 
 
@@ -57,6 +59,25 @@ def _compare(state: chatState) -> dict:
     return reply("I need at least two options to put side by side. Tell me what you're after and I'll find some.", route="end")
 
 
+def _questionnaire(profile: dict, message: str) -> dict:
+    """Every attribute of the question plan that is still open, asked together as one form of multi-select buttons."""
+    done = answered_topics(profile)
+    todo = [a for a in profile.get("attrs") or [] if topic_key(a["topic"]) not in done]
+    questions = [
+        {"topic": a["topic"], "question": a["question"], "durable": bool(a.get("durable")),
+         "options": [o for o in a.get("options") or [] if o and o.lower() != "other"][:6]}
+        for a in todo
+    ]
+    profile["asked"] = [*(profile.get("asked") or []), *(q["topic"] for q in questions)]
+    profile["pending"] = {"form": True, "questions": [{k: q[k] for k in ("topic", "options", "durable")} for q in questions]}
+    lead = _first_sentence(message) if message and "?" not in message else ""
+    remembered = profile.get("from_memory") or {}
+    note = ("I remember what you like, so I'm using it: " + " · ".join(f"**{t.replace('_', ' ').capitalize()}:** {v}" for t, v in remembered.items())
+            + ". Tell me if any of that has changed.\n\n") if remembered else ""
+    text = f"{lead}\n\n{note}**A few quick questions so I pick right.** Tap as many as you like in each, or write your own.".strip()
+    return reply(text, profile=profile, form={"questions": questions}, route="end")
+
+
 def _first_sentence(text: str) -> str:
     return re.split(r"(?<=[.!])\s", text.strip(), maxsplit=1)[0]
 
@@ -91,9 +112,7 @@ def supervisor_node(state: chatState) -> chatState:
     attribute = next_attribute(profile)
     if intent in ("ask", "search") and profile.get("product") and not offers and not profile.get("skip") \
             and attribute and len(asked) < MAX_QUESTIONS_BEFORE_RESULTS:
-        question, topic = attribute["question"], attribute["topic"]
-        plan = {**plan, "options": attribute.get("options") or [], "durable": attribute.get("durable", False)}
-        intent = "ask"
+        return _questionnaire(profile, message)
     elif intent == "ask" and (not question or len(asked) >= MAX_QUESTIONS or (topic and topic in asked)):
         intent = "search"  # out of questions, or the model repeated one
     if intent in ("ask", "search") and not profile.get("product"):

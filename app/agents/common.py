@@ -1,5 +1,6 @@
 """Small helpers shared by the agents."""
 import re
+from datetime import date
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -58,22 +59,31 @@ def relevant_memories(recalled: list[dict] | None, product: str | None) -> list[
     words = _words(product or "")
     return [
         m for m in map(as_memory, recalled or [])
-        if not words or m.get("category") in ("person", "general")
+        if not words or m.get("category") == "person" or (m.get("category") == "general" and "kind" not in m)  # old threads only
         or _words(m.get("category")) & words or _words(m.get("text")) & words
     ]
+
+
+def _short(text: str, limit: int) -> str:
+    """Cut at a word boundary, never mid-word."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:-· ") + "…"
 
 
 _PLAIN_TOPICS = {"gender", "type", "category", "product", "audience", "for"}
 
 
 def _label(topic: str, value: str, product: str | None) -> str | None:
+    topic = topic.replace("_", " ")
     """"High" + "rise" -> "High rise"; "women" stays "women"; the product's own name ("jeans") is not a requirement."""
     value = value.strip()
     if not value or "open to suggestions" in value or topic_key(topic) == "budget" or _words(value) <= _words(product or ""):
         return None
     if topic_key(topic) in _PLAIN_TOPICS or topic.lower() in value.lower() or len(value.split()) >= 3:
-        return value[:32]
-    return f"{value} {topic.lower()}"[:32]
+        return _short(value, 32)
+    return _short(f"{value} {topic.lower()}", 32)
 
 
 def budget_label(profile: dict) -> str | None:
@@ -105,7 +115,7 @@ def requirement_labels(profile: dict, recalled: list[dict] | None = None, limit:
     for m in relevant_memories(recalled, product):
         text = m["text"].split(":")[-1].strip() if "preference for" in m["text"] else m["text"]
         if m.get("kind") != "dislike" and text and text.lower() not in have:
-            labels.append((text[:40], True))
+            labels.append((_short(text, 40), True))
     return labels[:limit]
 
 
@@ -168,11 +178,12 @@ def shortlist_text(offers: list[dict] | None, shown: list[int] | None, pick: int
 def known_text(profile: dict, summary: str = "", recalled: list[dict] | None = None,
                offers: list[dict] | None = None, shown: list[int] | None = None, wishlist: list[dict] | None = None) -> str:
     """Everything the requirements agent already knows, so it never asks for it again."""
+    today = f"Today's date: {date.today().isoformat()}. Shoppers want what is current: the newest generation of every product.\n\n"
     if not profile:
-        known = "Known so far: nothing yet."
+        known = today + "Known so far: nothing yet."
     else:
         asked = profile.get("asked") or []
-        known = "Known so far:\n" + requirements_text(profile) + (
+        known = today + "Known so far:\n" + requirements_text(profile) + (
             f"\nQuestions already asked ({len(asked)} of {MAX_QUESTIONS} max): {', '.join(asked) or 'none'}"
         )
     for block in (

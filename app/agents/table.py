@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.agents.common import budget_label, remembered_text, reply, requirement_labels, requirements_text, within_budget
 from app.agents.presenter import _listing_text, _merge, prepare_all
+from app.freshness import model_year
 from app.commands import ACCEPT, CHANGE, SHOW_ALTERNATIVES
 from app.llm import Structured, load_prompt
 from app.state import chatState
@@ -83,8 +84,8 @@ def compare_node(state: chatState) -> chatState:
             "number": o["number"], "title": o["title"], "image_url": o.get("image_url"), "best": o["number"] == pick,
             "price_inr": o.get("price_inr"), "price_display": o["price_display"], "price_verified": bool(o.get("price_verified")), "seller": o["seller"],
             "seller_trusted": o.get("seller_trusted", True), "link": o.get("link"), "token": o.get("token"),
-            "stores": [{k: s.get(k) for k in ("name", "price_display", "link", "trusted", "verified")} for s in (o.get("stores") or [])[:4]],
-            "rating": o.get("rating"), "rating_count": o.get("rating_count"),
+            "stores": [{k: s.get(k) for k in ("name", "price_display", "link", "trusted", "verified", "total_inr", "shipping")} for s in (o.get("stores") or [])[:4]],
+            "rating": o.get("rating"), "rating_count": o.get("rating_count"), "year": model_year(o["title"]),
             "values": {spec: r.values.get(spec) for spec in result.specs[:6]},
             # the budget is a fact about the real price, so it is computed here, never guessed from a title
             "matches": {label: (within_budget(profile, o.get("price_inr")) if label == money else r.matches.get(label, "unknown"))

@@ -1,7 +1,7 @@
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.conftest import client_for
 from langchain_core.messages import AIMessage
 
 from app import history
@@ -10,7 +10,7 @@ from app.db import pool
 
 @pytest.fixture
 def ids():
-    t, u = f"test-{uuid.uuid4().hex[:8]}", f"test-{uuid.uuid4().hex[:8]}"
+    t, u = f"google:test-{uuid.uuid4().hex[:8]}", f"google:test-{uuid.uuid4().hex[:8]}"
     yield t, u
     with pool.connection() as conn:
         conn.execute("delete from chat_log where thread_id = %s", (t,))
@@ -38,12 +38,12 @@ def test_chat_endpoint_saves_the_turn_and_history_serves_it(ids, monkeypatch):
     fake = type("G", (), {"invoke": lambda self, *a, **k: {
         "messages": [AIMessage(content="Hi!")], "options": ["Laptop"], "cards": [], "recalled": [], "saved": ["Saved: x"]}})()
     monkeypatch.setattr(api, "chatbot", fake)
-    client = TestClient(api.app)
-    assert client.post("/chat", json={"message": "hello", "thread_id": t, "user_id": u}).json()["reply"] == "Hi!"
-    got = client.get("/history", params={"thread_id": t, "user_id": u}).json()
+    client = client_for(u)
+    assert client.post("/chat", json={"message": "hello", "thread_id": t}).json()["reply"] == "Hi!"
+    got = client.get("/history", params={"thread_id": t}).json()
     assert [m["role"] for m in got] == ["user", "assistant"]
     assert got[1]["options"] == ["Laptop"] and got[1]["memory"]["saved"] == ["Saved: x"]
-    assert client.get("/history", params={"thread_id": t, "user_id": "intruder"}).json() == []
+    assert client_for("google:intruder").get("/history", params={"thread_id": t}).json() == []
 
 
 def test_failed_turns_are_saved_too(ids, monkeypatch):
@@ -54,7 +54,7 @@ def test_failed_turns_are_saved_too(ids, monkeypatch):
         raise RuntimeError("model not found")
 
     monkeypatch.setattr(api, "chatbot", type("G", (), {"invoke": boom})())
-    client = TestClient(api.app)
-    assert "went wrong" in client.post("/chat", json={"message": "hi", "thread_id": t, "user_id": u}).json()["reply"]
-    got = client.get("/history", params={"thread_id": t, "user_id": u}).json()
+    client = client_for(u)
+    assert "went wrong" in client.post("/chat", json={"message": "hi", "thread_id": t}).json()["reply"]
+    got = client.get("/history", params={"thread_id": t}).json()
     assert [m["role"] for m in got] == ["user", "assistant"] and "went wrong" in got[1]["content"]

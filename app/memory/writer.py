@@ -24,11 +24,11 @@ def clean(items: list[dict]) -> list[dict]:
     return out[:MAX_PER_TURN]
 
 
-def save(store, user_id: str, items: list[dict]) -> list[str]:
+def save(store, user_id: str, items: list[dict], source: str = "said") -> list[str]:
     """Save each memory (or update the one that says the same thing). Returns events like "Saved: Wears size 5"."""
     events = []
     for m in clean(items):
-        action, _ = remember(store, user_id, m["text"], m["category"], m["kind"], m["key"])
+        action, _ = remember(store, user_id, m["text"], m["category"], m["kind"], m["key"], source)
         if action == "unchanged":
             continue
         events.append(f"{'Saved' if action == 'added' else 'Updated'}: {m['text']}")

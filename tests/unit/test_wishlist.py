@@ -1,7 +1,7 @@
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.conftest import client_for
 
 import app.agents.memory as memory
 import app.wishlist as wl
@@ -15,7 +15,7 @@ OFFER = {"title": "Levi's Women's 724 High Rise Straight Jeans", "price_display"
 
 @pytest.fixture
 def uid():
-    u = f"test-{uuid.uuid4().hex[:8]}"
+    u = f"google:test-{uuid.uuid4().hex[:8]}"
     yield u
     with pool.connection() as conn:
         conn.execute("delete from wishlist where user_id = %s", (u,))
@@ -71,12 +71,12 @@ def test_wishlist_endpoints(uid, monkeypatch):
     import app.api.main as api
     learned = []
     monkeypatch.setattr(api.wishlist, "learn_taste", lambda *a: learned.append(a))
-    client = TestClient(api.app)
-    body = {"user_id": uid, "product": "jeans", "offer": OFFER}
+    client = client_for(uid)
+    body = {"product": "jeans", "offer": OFFER}
     first = client.post("/wishlist", json=body).json()
     assert first["new"] and len(learned) == 1  # learning is scheduled for new hearts only
     assert not client.post("/wishlist", json=body).json()["new"] and len(learned) == 1
-    listed = client.get("/wishlist", params={"user_id": uid}).json()
+    listed = client.get("/wishlist").json()
     assert [w["title"] for w in listed] == [OFFER["title"]]
-    assert client.delete(f"/wishlist/{first['id']}", params={"user_id": uid}).json() == {"ok": True}
-    assert client.get("/wishlist", params={"user_id": uid}).json() == []
+    assert client.delete(f"/wishlist/{first['id']}").json() == {"ok": True}
+    assert client.get("/wishlist").json() == []

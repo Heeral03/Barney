@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from fastapi.testclient import TestClient
+from tests.conftest import client_for
 
 import app.agents.researcher as researcher
 import app.pricing as pricing
@@ -30,12 +30,22 @@ def test_shopping_results_become_offers(monkeypatch):
 
 
 def test_stores_parse_and_skip_rows_without_a_price_or_link(monkeypatch):
-    monkeypatch.setenv("SERPAPI_API_KEY", "k")
-    rows = [{"name": "Myntra", "extracted_price": 600, "price": "₹600", "link": "https://myntra.com/x", "tag": "Most popular"},
+    rows = [{"name": "Myntra", "extracted_price": 600, "price": "₹600", "link": "https://myntra.com/x", "tag": "Most popular",
+             "shipping": "₹49", "extracted_total": 649, "details_and_offers": ["In stock online", "Free delivery by Fri", "10% off with HDFC card"]},
             {"name": "No link", "extracted_price": 5}, {"name": "No price", "link": "https://x"}]
-    monkeypatch.setattr(serpapi.httpx, "get", lambda url, **k: resp({"product_results": {"stores": rows}}))
-    assert serpapi.stores.__wrapped__("tok") == [
-        {"name": "Myntra", "price_inr": 600, "price_display": "₹600", "link": "https://myntra.com/x", "tag": "Most popular"}]
+    monkeypatch.setattr(serpapi, "_product", lambda token: [{"stores": rows}])
+    assert serpapi.stores("tok") == [
+        {"name": "Myntra", "price_inr": 600, "price_display": "₹600", "link": "https://myntra.com/x", "tag": "Most popular",
+         "shipping": "₹49", "total_inr": 649, "delivery": "Free delivery by Fri", "offers": ["10% off with HDFC card"]}]
+
+
+def test_reviews_come_from_the_same_call_as_the_stores(monkeypatch):
+    product = {"rating": 4.6, "reviews": 14026, "ratings": [{"stars": 5, "amount": 10955}],
+               "user_reviews": [{"text": "  Great noise cancelling  ", "rating": 5, "source": "Shop"}, {"rating": 1}]}
+    monkeypatch.setattr(serpapi, "_product", lambda token: [product])
+    out = serpapi.reviews("tok")
+    assert out["rating"] == 4.6 and out["count"] == 14026 and out["histogram"] == [{"stars": 5, "amount": 10955}]
+    assert out["snippets"] == [{"text": "Great noise cancelling", "rating": 5, "source": "Shop"}]
 
 
 def test_running_out_of_searches_switches_it_off(monkeypatch, real_availability):
@@ -91,6 +101,7 @@ def compare(monkeypatch, pages, stores=STORES):
     monkeypatch.setattr(serpapi, "available", lambda: True)
     monkeypatch.setattr(serpapi, "stores", lambda token: [dict(s) for s in stores])
     monkeypatch.setattr(pricing, "page_price", lambda url, timeout=0: pages.get(url.split("/")[2]))
+    pricing._cache.clear()  # each call is a fresh lookup
     return pricing.compare("tok")
 
 
@@ -180,7 +191,7 @@ def test_compare_endpoint(monkeypatch):
     monkeypatch.setattr(serpapi, "available", lambda: True)
     monkeypatch.setattr(serpapi, "stores", lambda token: [dict(s) for s in STORES[:3]])
     monkeypatch.setattr(pricing, "page_price", lambda url, timeout=0: {"myntra.com": 600.0, "flipkart.com": 558.0}.get(url.split("/")[2]))
-    out = TestClient(api.app).post("/compare", json={"token": "tok"}).json()
+    out = client_for("google:pricing").post("/compare", json={"token": "tok"}).json()
     assert [s["name"] for s in out["stores"]] == ["AJIO.com", "Flipkart", "Myntra"]
     assert out["cheapest"]["seller"] == "AJIO.com" and out["cheapest"]["link"] == "https://ajio.com/p" and "Prices differ" in out["text"]
 

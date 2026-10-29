@@ -88,13 +88,34 @@ def search_shopping(query: str) -> list[dict]:
     return offers
 
 
-@ttl_cache(900)
+@ttl_cache(1800)
+def _product(token: str) -> list[dict]:
+    """The one "immersive product" call for a listing. It carries the stores and the reviews, so both come from one search.
+    Returned as a one-item list because the cache holds lists."""
+    return [(_get({"engine": "google_immersive_product", "page_token": token}).get("product_results") or {})]
+
+
 def stores(token: str) -> list[dict]:
-    """Every store selling one listing: name, price and a direct link to that store's page."""
-    data = _get({"engine": "google_immersive_product", "page_token": token})
+    """Every store selling one listing: name, price, a direct link, and what getting it costs (delivery, total, offers)."""
     rows = []
-    for s in (data.get("product_results") or {}).get("stores") or []:
+    for s in (_product(token) or [{}])[0].get("stores") or []:
         if s.get("extracted_price") and s.get("link") and s.get("name"):
-            rows.append({"name": s["name"], "price_inr": s["extracted_price"], "price_display": s.get("price"),
-                         "link": s["link"], "tag": s.get("tag")})
+            details = [str(d) for d in s.get("details_and_offers") or []]
+            rows.append({
+                "name": s["name"], "price_inr": s["extracted_price"], "price_display": s.get("price"),
+                "link": s["link"], "tag": s.get("tag"),
+                "shipping": s.get("shipping"), "total_inr": s.get("extracted_total"),
+                "delivery": next((d for d in details if "deliver" in d.lower()), None),
+                "offers": [d for d in details if "deliver" not in d.lower() and "in stock" not in d.lower()][:3],
+            })
     return rows
+
+
+def reviews(token: str) -> dict:
+    """What buyers say, from the same call as `stores`: the star histogram and a few review texts."""
+    product = (_product(token) or [{}])[0]
+    snippets = [{"text": str(r["text"]).strip()[:500], "rating": r.get("rating"), "source": r.get("source")}
+                for r in product.get("user_reviews") or [] if r.get("text")][:8]
+    return {"rating": product.get("rating"), "count": product.get("reviews"),
+            "histogram": [{"stars": h.get("stars"), "amount": h.get("amount")} for h in product.get("ratings") or []],
+            "snippets": snippets}

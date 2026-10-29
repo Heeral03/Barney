@@ -6,6 +6,10 @@ export type Store = {
   trusted: boolean;
   verified: boolean | "corrected" | null;
   tag?: string | null;
+  shipping?: string | null;
+  total_inr?: number | null;
+  delivery?: string | null;
+  offers?: string[];
 };
 
 export type Offer = {
@@ -26,14 +30,22 @@ export type Offer = {
   product?: string;
   stores?: Store[];
   over_budget?: boolean;
+  notes?: Note[];
+  checked_at?: number | null;
 };
 
+export type Note = { kind: "good" | "warn"; text: string };
+
 export type TableRow = Offer & {
+  year?: number | null;
   values: Record<string, string | null>;
   matches: Record<string, "yes" | "no" | "unknown">;
 };
 
 export type CompareTable = { specs: string[]; requirements: string[]; rows: TableRow[] };
+
+export type FormQuestion = { topic: string; question: string; options: string[]; durable?: boolean };
+export type Form = { questions: FormQuestion[] };
 
 export type Turn = {
   role: "user" | "assistant";
@@ -41,6 +53,7 @@ export type Turn = {
   products?: Offer[];
   options?: string[];
   table?: CompareTable | null;
+  form?: Form | null;
 };
 
 export type WishItem = {
@@ -53,7 +66,13 @@ export type WishItem = {
   link?: string | null;
   image_url?: string | null;
   target_inr?: number | null;
+  price_low?: number;
+  price_high?: number;
+  checks?: number;
+  checked_at?: number;
 };
+
+export type PriceAlert = { id: number; wishlist_id: number; title: string; price_inr: number; target_inr: number; link?: string | null; at: number };
 
 export type ComparisonCard = {
   thread_id: string;
@@ -77,13 +96,31 @@ export type Overview = {
   budget: Budget;
   wishlist: WishItem[];
   comparisons: ComparisonCard[];
+  alerts?: number;
 };
 
-export type Memory = { key: string; text: string; category: string };
+export type Memory = { key: string; text: string; category: string; source: "said" | "inferred" };
+export type Suggestion = { id: number; text: string; category: string };
+export type Settings = { learning: boolean; onboarded: boolean; profiles: string[] };
+export type ReviewSummary = {
+  rating?: number | null;
+  count?: number | null;
+  split: { stars: number; percent: number }[];
+  praise: string[];
+  complaints: string[];
+  verdict: string;
+};
+export type SharedComparison = { title: string; table: CompareTable };
+
+export type StreamEvent =
+  | { type: "status"; text: string }
+  | { type: "preview"; products: Offer[] }
+  | { type: "done"; answer: ChatResponse };
 
 export type ChatResponse = {
   reply: string;
   options?: string[];
   products?: Offer[];
   table?: CompareTable | null;
+  form?: Form | null;
 };

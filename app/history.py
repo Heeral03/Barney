@@ -31,6 +31,13 @@ def append(thread_id: str, user_id: str, entries: list[tuple[str, str, dict]]) -
             )
 
 
+def owned_by_someone_else(thread_id: str, user_id: str) -> bool:
+    """True when this thread already has a transcript that belongs to another user (its state must not be shared)."""
+    with pool.connection() as conn:
+        row = conn.execute("select 1 from chat_log where thread_id = %s and user_id <> %s limit 1", (thread_id, user_id)).fetchone()
+    return row is not None
+
+
 def load(thread_id: str, user_id: str) -> list[dict]:
     """The conversation in order. Only the owner (same user_id) can read a thread."""
     with pool.connection() as conn:

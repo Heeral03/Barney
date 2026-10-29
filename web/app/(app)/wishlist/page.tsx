@@ -1,42 +1,78 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useBarney } from "@/lib/barney";
-import { inr } from "@/lib/format";
-import type { WishItem } from "@/lib/types";
+import { ago, inr } from "@/lib/format";
+import type { PriceAlert, WishItem } from "@/lib/types";
 import { ArtFor } from "@/components/illustrations";
 import { HeartIcon } from "@/components/icons";
 import { Img } from "@/components/Img";
 import { Empty, Page } from "@/components/ui/Page";
 
 export default function WishlistPage() {
-  const { wishlist, userId, refresh, ready } = useBarney();
+  const { wishlist, refresh, ready } = useBarney();
+  const [alerts, setAlerts] = useState<PriceAlert[]>([]);
+
+  // Price drops that reached a target since the last visit; seeing them here counts as reading them.
+  useEffect(() => {
+    if (!ready) return;
+    api.alerts().then((a) => {
+      setAlerts(a);
+      if (a.length) api.alertsSeen().then(() => refresh()).catch(() => {});
+    }).catch(() => {});
+  }, [ready, refresh]);
 
   return (
     <Page title="Your wishlist" intro="Everything you’ve hearted. Set the price you’re waiting for and I’ll flag an item when it gets there. Each heart also teaches me what you like.">
+      {alerts.length > 0 && (
+        <div className="mb-6 rounded-2xl border border-sage-ink/30 bg-sage-bg p-5" role="status">
+          <p className="font-serif text-[20px] text-sage-ink">Good news: {alerts.length === 1 ? "a price" : `${alerts.length} prices`} dropped to your target</p>
+          <ul className="mt-2 space-y-1 text-[14px]">
+            {alerts.map((a) => (
+              <li key={a.id}>
+                {a.link ? <a href={a.link} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">{a.title}</a> : a.title}
+                {" "}is now <strong>{inr(a.price_inr)}</strong> (your target was {inr(a.target_inr)}).
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {ready && wishlist.length === 0 ? (
         <Empty title="Nothing saved yet." text="Tap the heart on any product and it will wait for you here.">
-          <Link href="/" className="mt-5 inline-block rounded-full bg-ink px-5 py-2.5 text-[14px] text-white transition hover:bg-ink/85">Find something</Link>
+          <Link href="/app" className="mt-5 inline-block rounded-full bg-ink px-5 py-2.5 text-[14px] text-white transition hover:bg-ink/85">Find something</Link>
         </Empty>
       ) : (
         <ul className="divide-y divide-line rounded-2xl border border-line bg-card">
-          {wishlist.map((w) => <Row key={w.id} item={w} userId={userId} onChange={refresh} />)}
+          {wishlist.map((w) => <Row key={w.id} item={w} onChange={refresh} />)}
         </ul>
       )}
     </Page>
   );
 }
 
-function Row({ item: w, userId, onChange }: { item: WishItem; userId: string; onChange: () => Promise<void> }) {
+function Row({ item: w, onChange }: { item: WishItem; onChange: () => Promise<void> }) {
   const [target, setTarget] = useState(w.target_inr ? String(Math.round(w.target_inr)) : "");
   const hit = !!(w.target_inr && w.price_inr && w.price_inr <= w.target_inr);
+  const [checking, setChecking] = useState<"idle" | "busy" | "unreadable">("idle");
+
+  async function checkNow() {
+    setChecking("busy");
+    try {
+      const r = await api.checkPrice(w.id);
+      setChecking(r.price === null ? "unreadable" : "idle");
+      await onChange();
+    } catch {
+      setChecking("unreadable");
+    }
+  }
 
   async function save() {
     const value = target.trim() === "" ? null : Number(target.replace(/[^\d.]/g, ""));
     if (value === (w.target_inr ?? null) || (value !== null && Number.isNaN(value))) return;
-    await api.setTarget(userId, w.id, value);
+    await api.setTarget(w.id, value);
     await onChange();
   }
 
@@ -48,6 +84,16 @@ function Row({ item: w, userId, onChange }: { item: WishItem; userId: string; on
       <div className="min-w-0 flex-1">
         <p className="line-clamp-2 text-[15px] font-medium leading-snug">{w.title}</p>
         <p className="mt-1 text-[13.5px] text-muted">{w.price_display}{w.seller ? ` · ${w.seller}` : ""}</p>
+        <p className="mt-1 text-[12.5px] text-faint">
+          {w.checks && w.price_low !== undefined && w.price_high !== undefined
+            ? `Seen between ${inr(w.price_low)} and ${inr(w.price_high)} · checked ${ago(w.checked_at)}`
+            : "I check the store’s page for price changes every few hours"}
+          {" · "}
+          <button onClick={checkNow} disabled={checking === "busy"} className="underline underline-offset-4 hover:text-ink disabled:opacity-60">
+            {checking === "busy" ? "Checking…" : "Check now"}
+          </button>
+          {checking === "unreadable" && <span className="text-[#8a5a1c]"> · this store won’t let me read its page</span>}
+        </p>
         {w.link && <a href={w.link} target="_blank" rel="noopener noreferrer" className="mt-1 inline-block text-[13px] underline underline-offset-4 hover:text-muted">View at {w.seller ?? "the seller"}</a>}
       </div>
       <div className="flex items-center gap-4">
@@ -68,7 +114,7 @@ function Row({ item: w, userId, onChange }: { item: WishItem; userId: string; on
         </label>
         {hit && <span className="whitespace-nowrap rounded-full bg-sage-bg px-3 py-1 text-[12px] text-sage-ink">At your target</span>}
         <button
-          onClick={async () => { await api.removeWish(userId, w.id); await onChange(); }}
+          onClick={async () => { await api.removeWish(w.id); await onChange(); }}
           aria-label="Remove from wishlist"
           className="rounded-full p-2 text-danger transition hover:bg-tint"
         >

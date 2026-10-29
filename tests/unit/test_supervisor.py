@@ -1,3 +1,5 @@
+from datetime import date
+
 from langchain_core.messages import HumanMessage
 
 from app.agents.supervisor import route_after_supervisor, supervisor_node
@@ -28,16 +30,22 @@ ATTRS = [
 ]
 
 
-def test_it_walks_through_the_question_plan_before_searching():
+def test_it_asks_the_whole_question_plan_at_once_before_searching():
     profile = {"product": "jeans", "attrs": ATTRS}
     out = run("jeans for women", {"decision": "search", "queries": ["women jeans"], "message": "Nice, jeans!"}, profile=profile)
-    assert out["route"] == "end" and "**What fit do you like?**" in out["messages"][0].content
-    assert out["options"] == ["Straight", "Skinny", "Not sure, you suggest"]  # "other" dropped, no skip on the first question
-    assert out["profile"]["asked"] == ["fit"]
-    assert out["profile"]["pending"] == {"topic": "fit", "options": ["Straight", "Skinny"], "durable": True}
-    second = run("Straight", {"decision": "ask"}, profile={**out["profile"], "facts": {"fit": "Straight"}})
-    assert "**Which colour?**" in second["messages"][0].content
-    assert second["options"] == ["Blue", "Black", "Not sure, you suggest", "Just show me options"]  # a way out from question 2
+    assert out["route"] == "end" and out["options"] == []
+    topics = [q["topic"] for q in out["form"]["questions"]]
+    assert topics == ["fit", "colour", "occasion", "budget", "material"]
+    assert out["form"]["questions"][0]["options"] == ["Straight", "Skinny"]  # "other" is the page's own text box
+    assert out["profile"]["asked"] == topics
+    assert out["profile"]["pending"]["form"] is True
+    assert out["messages"][0].content.startswith("Nice, jeans!")
+
+
+def test_the_questionnaire_leaves_out_what_is_already_known():
+    profile = {"product": "jeans", "attrs": ATTRS, "facts": {"Fit": "straight"}, "budget_max": 1500}
+    topics = [q["topic"] for q in run("x", {"decision": "ask"}, profile=profile)["form"]["questions"]]
+    assert topics == ["colour", "occasion", "material"]
 
 
 def test_it_stops_asking_after_the_cap_the_skip_and_when_results_exist():
@@ -46,14 +54,6 @@ def test_it_stops_asking_after_the_cap_the_skip_and_when_results_exist():
     skipped = {"product": "jeans", "attrs": ATTRS, "skip": True}
     assert run("just show me", {"decision": "search", "queries": ["q"]}, profile=skipped)["route"] == "research"
     assert run("x", {"decision": "search", "queries": ["q"]}, profile={"product": "jeans", "attrs": ATTRS}, offers=SHOWN)["route"] == "research"
-
-
-def test_attributes_already_known_are_not_asked_again():
-    profile = {"product": "jeans", "attrs": ATTRS, "facts": {"Fit": "straight", "color": "blue"}, "asked": []}
-    assert "**What for?**" in run("x", {"decision": "ask"}, profile=profile)["messages"][0].content
-    profile["budget_max"] = 1000
-    profile["facts"]["occasion"] = "office"
-    assert "**Fabric?**" in run("x", {"decision": "ask"}, profile=profile)["messages"][0].content
 
 
 def test_pending_question_is_cleared_when_it_searches():
@@ -103,7 +103,7 @@ def test_buttons_need_no_plan():
     assert out["route"] == "end" and "haven't shown" in out["messages"][0].content
     assert run(BROADEN, profile={"product": "laptop"})["search"] == {"queries": ["laptop"], "mode": "more"}
     out = run(RAISE_BUDGET + "₹90,000", profile={"product": "laptop", "budget_max": 50000}, search={"queries": ["a"]})
-    assert out["profile"]["budget_max"] == 90000 and out["search"]["queries"] == ["a"] and out["route"] == "research"
+    assert out["profile"]["budget_max"] == 90000 and out["search"]["queries"] == [f"a {date.today().year}"] and out["route"] == "research"
     assert run(ACCEPT[0])["route"] == "end"
 
 

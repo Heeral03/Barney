@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, field_validator
 
+from app import alerts, settings
 from app.db import pool
 from app.llm import Structured, load_prompt
 from app.memory import writer
@@ -71,8 +72,9 @@ def items(user_id: str, limit: int = 100) -> list[dict]:
         rows = conn.execute(
             "select id, product, title, offer, target_inr from wishlist where user_id = %s order by id desc limit %s", (user_id, limit)
         ).fetchall()
-    return [{"id": r["id"], "product": r["product"], **r["offer"], "target_inr": float(r["target_inr"]) if r["target_inr"] is not None else None}
-            for r in rows]
+    seen = alerts.stats([r["id"] for r in rows])
+    return [{"id": r["id"], "product": r["product"], **r["offer"], "target_inr": float(r["target_inr"]) if r["target_inr"] is not None else None,
+             **seen.get(r["id"], {})} for r in rows]
 
 
 def set_target(user_id: str, item_id: int, target_inr: float | None) -> None:
@@ -86,14 +88,17 @@ def recent(user_id: str, n: int = 8) -> list[dict]:
     return [{"title": w["title"], "product": w["product"]} for w in items(user_id, n)]
 
 
-def learn_taste(store, user_id: str, offer: dict, product: str) -> list[str]:
-    """Turn one hearted listing into taste memories ("Likes high-rise straight-fit jeans"). Never raises."""
+def learn_taste(store, user_id: str, offer: dict, product: str, memory_id: str | None = None) -> list[str]:
+    """Turn one hearted listing into taste memories ("Likes high-rise straight-fit jeans"). Never raises.
+    Skipped when the shopper has paused learning. `memory_id` is whose tastes they go to (a profile), the account by default."""
     try:
+        if not settings.learning_on(user_id):
+            return []
         traits = extractor.invoke(
             [PROMPT, HumanMessage(content=f"Product type: {product or 'unknown'}\nListing title: {offer.get('title', '')[:160]}")]
         ).traits
         category = (product or "general").replace("_", " ").split()[-1].lower()
-        return writer.save(store, user_id, [{"text": t, "category": category, "kind": "preference"} for t in traits])
+        return writer.save(store, memory_id or user_id, [{"text": t, "category": category, "kind": "preference"} for t in traits], source="inferred")
     except Exception as e:
         log.warning("could not learn taste from the wishlist: %s", e)
         return []

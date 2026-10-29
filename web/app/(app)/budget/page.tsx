@@ -13,7 +13,7 @@ export default function BudgetPage() {
 }
 
 function BudgetView() {
-  const { overview, wishlist, userId, refresh } = useBarney();
+  const { overview, wishlist, refresh } = useBarney();
   const budget = overview?.budget;
   const [value, setValue] = useState(budget?.amount ? String(Math.round(budget.amount)) : "");
   const [saved, setSaved] = useState(false);
@@ -22,7 +22,7 @@ function BudgetView() {
     e.preventDefault();
     const n = value.trim() === "" ? null : Number(value.replace(/[^\d.]/g, ""));
     if (n !== null && (Number.isNaN(n) || n < 0)) return;
-    await api.setBudget(userId, n);
+    await api.setBudget(n);
     await refresh();
     setSaved(true);
     setTimeout(() => setSaved(false), 1800);

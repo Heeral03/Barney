@@ -9,7 +9,7 @@
   --line-strong: #ddd8cf;
   --ink: #161513;
   --muted: #6f6b64;
-  --faint: #9a958c;
+  --faint: #77726a;
   --tint: #f3f0ea;
   --sage-bg: #e8f1e9;
   --sage-ink: #2f6a3d;
@@ -69,3 +69,15 @@ body {
 .dot { animation: pulse-dot 1.2s infinite ease-in-out; }
 .dot:nth-child(2) { animation-delay: 0.15s; }
 .dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* keyboard users always see where they are */
+:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+input:focus-visible, select:focus-visible { outline-offset: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rise, .dot, .animate-pulse { animation: none !important; }
+}

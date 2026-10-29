@@ -1,7 +1,7 @@
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.conftest import client_for
 
 import app.overview as ov
 import app.wishlist as wl
@@ -12,7 +12,7 @@ from app.memory import store as ltm_store
 
 @pytest.fixture
 def uid():
-    u = f"test-{uuid.uuid4().hex[:8]}"
+    u = f"google:test-{uuid.uuid4().hex[:8]}"
     yield u
     with pool.connection() as conn:
         for table in ("wishlist", "budget", "chat_log"):
@@ -106,13 +106,13 @@ def test_a_new_shopper_gets_an_empty_overview_not_an_error(uid):
 
 def test_the_endpoints(uid):
     import app.api.main as api
-    client = TestClient(api.app)
+    client = client_for(uid)
     seed(uid)
     item = wl.add(uid, {"title": "Nike", "price_inr": 7995, "price_display": "₹7,995", "link": "https://x/1"}, "sneakers")
-    assert client.put("/budget", json={"user_id": uid, "amount_inr": 10000}).json() == {"amount": 10000, "wishlist_total": 7995, "remaining": 2005}
-    assert client.get("/budget", params={"user_id": uid}).json()["amount"] == 10000
-    assert client.put(f"/wishlist/{item}/target", json={"user_id": uid, "target_inr": 6500}).json() == {"ok": True}
-    assert client.get("/wishlist", params={"user_id": uid}).json()[0]["target_inr"] == 6500
-    assert client.get("/overview", params={"user_id": uid}).json()["stats"]["wishlist"] == 1
-    assert len(client.get("/comparisons", params={"user_id": uid, "limit": 5}).json()) == 2
-    assert client.put("/budget", json={"user_id": uid, "amount_inr": None}).json()["amount"] is None
+    assert client.put("/budget", json={"amount_inr": 10000}).json() == {"amount": 10000, "wishlist_total": 7995, "remaining": 2005}
+    assert client.get("/budget").json()["amount"] == 10000
+    assert client.put(f"/wishlist/{item}/target", json={"target_inr": 6500}).json() == {"ok": True}
+    assert client.get("/wishlist").json()[0]["target_inr"] == 6500
+    assert client.get("/overview").json()["stats"]["wishlist"] == 1
+    assert len(client.get("/comparisons", params={"limit": 5}).json()) == 2
+    assert client.put("/budget", json={"amount_inr": None}).json()["amount"] is None

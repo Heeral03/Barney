@@ -1,6 +1,9 @@
 import math
 import re
+from datetime import date
 
+from app.freshness import model_year
+from app.pricing import is_trusted
 from app.state import RESET, chatState
 
 LIMIT = 6  # the first shortlist: the best pick first, the rest are the "other options" shown on request
@@ -11,12 +14,71 @@ _MEN = re.compile(r"\b(men|mens|men's|male|boys?)\b", re.I)
 _WOMEN = re.compile(r"\b(women|womens|women's|ladies|female|girls?)\b", re.I)
 
 
+_OLD_OK = re.compile(r"\b(refurbished|renewed|used|second[- ]?hand|pre[- ]?owned|old|older|vintage|retro)\b", re.I)
+STALE_AFTER = 2  # a model year more than this many years behind the current one is an old model
+
+
+def _year(o: dict) -> int | None:
+    """The year a listing's product came out, from its title ("2019 Edition", "i7 13th Gen", "MacBook Air M1")."""
+    return model_year(o.get("title") or "")
+
+
+def _latest(offers: list[dict], profile: dict, queries: list[str]) -> list[dict]:
+    """Drop listings whose title names an old model year (a 2019 laptop in 2026). Skipped when the shopper asked for
+    refurbished or older models, or named that year themselves. Never empties the list."""
+    said = [*map(str, (profile.get("facts") or {}).values()), *queries]
+    if _OLD_OK.search(" ".join(said)):
+        return offers
+    this_year = date.today().year
+    named = {y for s in said if (y := model_year(s))}  # they asked for that very generation or year
+    fresh = [o for o in offers if (y := _year(o)) is None or y in named or y >= this_year - STALE_AFTER]
+    return fresh if len(fresh) >= 3 else offers
+
+
+_PLUGS = {
+    "usb-c": re.compile(r"\b(usb[ -]?c|type[ -]?c)\b", re.I),
+    "lightning": re.compile(r"\blightning\b", re.I),
+    "3.5mm": re.compile(r"\b3\.5\s?mm\b|\baux\b", re.I),
+    "micro-usb": re.compile(r"\bmicro[ -]?usb\b", re.I),
+}
+
+
+def _compatible(offers: list[dict], profile: dict, queries: list[str]) -> list[dict]:
+    """When the shopper named the plug they need (USB-C, Lightning, 3.5 mm), drop listings whose title names a different
+    one. A title that names none stays. Never empties the list."""
+    said = " ".join([*map(str, (profile.get("facts") or {}).values()), *queries])
+    wanted = {name for name, rx in _PLUGS.items() if rx.search(said)}
+    if len(wanted) != 1:  # none asked, or several acceptable: nothing to enforce
+        return offers
+    kept = [o for o in offers if not any(rx.search(o["title"]) for name, rx in _PLUGS.items() if name not in wanted)
+            or _PLUGS[next(iter(wanted))].search(o["title"])]
+    return kept if len(kept) >= 3 else offers
+
+
+JUNK_BELOW = 0.3  # priced under this share of the median price: counterfeits, empty boxes, wrong category
+MIN_FOR_MEDIAN = 5
+
+
+def _trustworthy(offers: list[dict]) -> list[dict]:
+    """Drop what looks like junk: a price far below everything else for the same search, and listings nobody has rated
+    that come from a seller we do not recognise. Never empties the list."""
+    prices = sorted(o["price_inr"] for o in offers if o.get("price_inr"))
+    floor = prices[len(prices) // 2] * JUNK_BELOW if len(prices) >= MIN_FOR_MEDIAN else 0
+    kept = [o for o in offers
+            if not (o.get("price_inr") and o["price_inr"] < floor)
+            and (o.get("rating") or o.get("rating_count") or is_trusted(o.get("seller") or ""))]
+    return kept if len(kept) >= 3 else offers
+
+
 def _score(o: dict, position: int) -> float:
-    """Rating shrunk toward 3 when there are few reviews, minus a small penalty for lower search relevance."""
+    """Rating shrunk toward 3 when there are few reviews, minus a small penalty for lower search relevance and for
+    a model year that is behind the current one."""
     reviews = o.get("rating_count") or 0
     confidence = reviews / (reviews + 20)
     rating = o.get("rating") or 3.0
-    return rating * confidence + 3.0 * (1 - confidence) - 0.25 * position + 0.1 * math.log10(reviews + 1)
+    year = _year(o)
+    age = min(max(date.today().year - year, 0), 5) if year else 0
+    return rating * confidence + 3.0 * (1 - confidence) - 0.25 * position + 0.1 * math.log10(reviews + 1) - 0.5 * age
 
 
 def _key(o: dict) -> str:
@@ -87,7 +149,8 @@ def curator_node(state: chatState) -> chatState:
         lo = None  # "around ₹2,000" is a ceiling, not an exact price
 
     skip = {_key(o) for o in [*existing, *(state.get("reserve") or [])]} if more else set()
-    unique = _right_audience(_dedupe(state.get("raw_offers") or [], skip), _audience(profile, search.get("queries") or []))
+    queries = search.get("queries") or []
+    unique = _trustworthy(_compatible(_latest(_right_audience(_dedupe(state.get("raw_offers") or [], skip), _audience(profile, queries)), profile, queries), profile, queries))
     priced = [o for o in unique if o.get("price_inr")]
     unpriced = [o for o in unique if not o.get("price_inr")]  # web results with no price in their text
     fits = [o for o in priced if (hi is None or o["price_inr"] <= hi) and (lo is None or o["price_inr"] >= lo)]
@@ -106,7 +169,11 @@ def curator_node(state: chatState) -> chatState:
     take = MORE_BATCH if more else LIMIT
     chosen = ranked[:take]
     if fits and not more:
-        cheapest = min(fits, key=lambda o: o["price_inr"])
+        # A "cheaper option" is a common follow-up, but the cheapest listing must be a real candidate: not an older
+        # model than the shortlist, and not one nobody has rated while rated ones exist.
+        newest = max((y for o in chosen if (y := _year(o))), default=0)
+        decent = [o for o in fits if (_year(o) or newest) >= newest - 1 and (o.get("rating") or not any(c.get("rating") for c in chosen))]
+        cheapest = min(decent or fits, key=lambda o: o["price_inr"])
         if cheapest not in chosen:
             chosen[-1] = cheapest  # a "cheaper option" is the most common follow-up, so always have one ready
     reserve = [o for o in ranked if o not in chosen][:RESERVE]

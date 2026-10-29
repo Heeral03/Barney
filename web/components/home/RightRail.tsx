@@ -51,7 +51,7 @@ export function RightRail() {
               value={budget?.remaining != null ? inr(budget.remaining) : "Not set"}
               sub={budget?.remaining != null ? "remaining" : "Set one"}
             />
-            <Tile href="/" icon={<CompareGlyph />} label="Comparisons" value={`${stats?.comparisons ?? 0}`} sub="made" />
+            <Tile href="/app" icon={<CompareGlyph />} label="Comparisons" value={`${stats?.comparisons ?? 0}`} sub="made" />
             <Tile href="/preferences" icon={<GearIcon />} label="Preferences" value={`${stats?.preferences ?? 0}`} sub="saved" />
           </div>
         </section>
