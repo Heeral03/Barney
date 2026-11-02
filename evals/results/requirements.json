@@ -1,0 +1,260 @@
+{
+  "budget_parser": {
+    "cases": 19,
+    "accuracy": 1.0,
+    "wrong": []
+  },
+  "requirements_agent": {
+    "cases": 20,
+    "runs": 20,
+    "case_pass_rate": 0.8,
+    "by_check": {
+      "budget_max": 1.0,
+      "budget_min": 1.0,
+      "decision": 0.9,
+      "fact": 1.0,
+      "mode": 0.5,
+      "plan_has_budget": 1.0,
+      "plan_shape": 1.0,
+      "product": 1.0,
+      "product_kept": 1.0,
+      "queries_clean": 0.833,
+      "remember": 0.5,
+      "restart": 1.0,
+      "skip": 1.0
+    },
+    "failures": [
+      "brand-named: decision (decision=ask)",
+      "name: remember (decision=chat)",
+      "cheaper: queries_clean (decision=search)",
+      "brand-switch: decision (decision=ask)",
+      "brand-switch: mode (decision=ask)"
+    ],
+    "rows": [
+      {
+        "case": "vague-jeans",
+        "run": 0,
+        "decision": "ask",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "plan_shape": true,
+          "plan_has_budget": true
+        }
+      },
+      {
+        "case": "vague-laptop",
+        "run": 0,
+        "decision": "ask",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "plan_shape": true,
+          "plan_has_budget": true
+        }
+      },
+      {
+        "case": "vague-headphones",
+        "run": 0,
+        "decision": "ask",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "plan_shape": true,
+          "plan_has_budget": true
+        }
+      },
+      {
+        "case": "gift",
+        "run": 0,
+        "decision": "ask",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "plan_shape": true,
+          "plan_has_budget": true
+        }
+      },
+      {
+        "case": "jeans-detailed",
+        "run": 0,
+        "decision": "search",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "budget_max": true,
+          "skip": true,
+          "queries_clean": true
+        }
+      },
+      {
+        "case": "earbuds-budget",
+        "run": 0,
+        "decision": "search",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "budget_max": true,
+          "skip": true,
+          "queries_clean": true
+        }
+      },
+      {
+        "case": "laptop-lakh",
+        "run": 0,
+        "decision": "search",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "budget_max": true,
+          "skip": true,
+          "fact:recency": true,
+          "queries_clean": true
+        }
+      },
+      {
+        "case": "refurb",
+        "run": 0,
+        "decision": "search",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "budget_max": true,
+          "fact:condition": true,
+          "queries_clean": true
+        }
+      },
+      {
+        "case": "brand-named",
+        "run": 0,
+        "decision": "ask",
+        "passed": false,
+        "checks": {
+          "decision": false,
+          "product": true,
+          "budget_max": true
+        }
+      },
+      {
+        "case": "range",
+        "run": 0,
+        "decision": "search",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "budget_max": true,
+          "budget_min": true,
+          "skip": true,
+          "queries_clean": true
+        }
+      },
+      {
+        "case": "greeting",
+        "run": 0,
+        "decision": "chat",
+        "passed": true,
+        "checks": {
+          "decision": true
+        }
+      },
+      {
+        "case": "thanks",
+        "run": 0,
+        "decision": "chat",
+        "passed": true,
+        "checks": {
+          "decision": true
+        }
+      },
+      {
+        "case": "name",
+        "run": 0,
+        "decision": "chat",
+        "passed": false,
+        "checks": {
+          "decision": true,
+          "remember": false
+        }
+      },
+      {
+        "case": "size-memory",
+        "run": 0,
+        "decision": "chat",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "remember": true
+        }
+      },
+      {
+        "case": "more",
+        "run": 0,
+        "decision": "alternatives",
+        "passed": true,
+        "checks": {
+          "decision": true
+        }
+      },
+      {
+        "case": "compare",
+        "run": 0,
+        "decision": "compare",
+        "passed": true,
+        "checks": {
+          "decision": true
+        }
+      },
+      {
+        "case": "cheaper",
+        "run": 0,
+        "decision": "search",
+        "passed": false,
+        "checks": {
+          "decision": true,
+          "product_kept": true,
+          "mode": true,
+          "queries_clean": false
+        }
+      },
+      {
+        "case": "question-about-listing",
+        "run": 0,
+        "decision": "chat",
+        "passed": true,
+        "checks": {
+          "decision": true
+        }
+      },
+      {
+        "case": "brand-switch",
+        "run": 0,
+        "decision": "ask",
+        "passed": false,
+        "checks": {
+          "decision": false,
+          "mode": false
+        }
+      },
+      {
+        "case": "switch-product",
+        "run": 0,
+        "decision": "ask",
+        "passed": true,
+        "checks": {
+          "decision": true,
+          "product": true,
+          "restart": true
+        }
+      }
+    ]
+  }
+}

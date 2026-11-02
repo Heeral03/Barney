@@ -28,10 +28,12 @@ from deepeval.test_run.test_run import global_test_run_manager
 from deepeval.tracing import observe, update_current_trace
 from groq import RateLimitError
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 
 import app.agents.presenter as presenter
 import app.agents.researcher as researcher
 import app.sources.serpapi as serpapi
+from app.agents.confirm import AUTO
 from app.commands import SKIP
 from app.graph import chatbot, checkpointer
 from app.memory import store as ltm_store
@@ -77,7 +79,10 @@ def _invoke(state: dict, cfg: dict) -> dict:
     """One graph turn. Groq's free tier limits tokens per minute; wait it out rather than count it against Barney."""
     for attempt in range(6):
         try:
-            return chatbot.invoke(state, config=cfg)
+            out = chatbot.invoke(state, config=cfg)
+            if out.get("__interrupt__"):  # a close call: the simulated shopper says "you decide"
+                out = chatbot.invoke(Command(resume=AUTO), config=cfg)
+            return out
         except RateLimitError:
             time.sleep(20 + 15 * attempt)
     raise RuntimeError("Groq stayed rate limited")

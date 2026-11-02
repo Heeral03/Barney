@@ -137,9 +137,11 @@ def present_node(state: chatState) -> chatState:
     prices = [o["price_inr"] for o in offers if o.get("price_inr")]
     spread = (f"No budget is set. These listings range from {inr(min(prices))} to {inr(max(prices))}.\n\n"
               if prices and not profile.get("budget_max") and max(prices) > 1.5 * min(prices) else "")
+    chosen = profile.get("pick_hint")  # the shopper settled a close call (see confirm.py): their choice is the pick
+    decided = f"The shopper has chosen #{chosen} themselves. Set best_number to {chosen} and explain why it suits them.\n\n" if chosen else ""
     rec: Recommendation = recommender.invoke(
-        [PRESENTER_PROMPT, _context(state, f"{spread}Listings:\n{_listing_text(offers)}")])
-    best_listing = next((o for o in offers if o["number"] == rec.best_number), offers[0])
+        [PRESENTER_PROMPT, _context(state, f"{spread}{decided}Listings:\n{_listing_text(offers)}")])
+    best_listing = next((o for o in offers if o["number"] == (chosen or rec.best_number)), offers[0])
     ready = [f.result() for f in prefetch.values()]
     best = next((o for o in ready if o["number"] == best_listing["number"]), None) or _prepare(best_listing)
     profile["pick"] = best["number"]
@@ -215,7 +217,7 @@ def more_node(state: chatState) -> chatState:
 
 
 def route_after_curator(state: chatState) -> str:
-    return "more" if (state.get("search") or {}).get("mode") == "more" else "present"
+    return "more" if (state.get("search") or {}).get("mode") == "more" else "confirm_pick"
 
 
 def route_after_more(state: chatState) -> str:

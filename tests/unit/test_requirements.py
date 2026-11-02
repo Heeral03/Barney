@@ -160,3 +160,12 @@ def test_earlier_answers_for_this_kind_of_product_are_applied_not_asked_again():
                                   {"fit": "Straight", "color": "Dark blue", "size": "30"})
     assert profile["facts"] == {"colour": "red", "fit": "Straight"}  # what they say now wins; an unknown slot is ignored
     assert profile["from_memory"] == {"fit": "Straight"} and profile["prefilled"] is True
+
+
+def test_wants_results_now():
+    from app.commands import wants_results_now
+
+    for yes in ["just show me", "you decide", "surprise me", "laptop under 1 lakh, just pick for me", "Your call", "stop asking"]:
+        assert wants_results_now(yes), yes
+    for no in ["I need a laptop", "show me the cheapest one under 5000", "which one is lighter", ""]:
+        assert not wants_results_now(no), no

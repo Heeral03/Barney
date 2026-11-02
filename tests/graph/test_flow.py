@@ -34,6 +34,7 @@ CATALOG = {
 
 @pytest.fixture
 def stubs(monkeypatch):
+    monkeypatch.setenv("CONFIRM_CLOSE_CALLS", "0")  # the pause has its own tests below
     calls = {"shopping": [], "threads": set(), "decider_saw": [], "compare": 0, "media": []}
     plans = []
 
@@ -363,3 +364,99 @@ def test_a_greeting_never_touches_the_shopping_model_or_the_search(stubs, thread
     out, _ = chat(thread_id, user_id, "hey barney")
     assert out["messages"][-1].content == "Hey! 👋 What are you after?" and len(asked) == 1
     assert calls["decider_saw"] == [] and calls["shopping"] == [] and out["cards"] == [] and out["table"] is None
+
+
+# ---------------------------------------------------------------------------------------------------- human in the loop
+
+CLOSE_CALL = [shoe("Asics Women Gel Pro", 4000, 4.6, 300), shoe("Decathlon Women Run 500", 2500, 4.4, 500), shoe("Fila Women Zeal", 3900, 4.3, 100)]
+
+
+@pytest.fixture
+def close_call(stubs, monkeypatch):
+    monkeypatch.setenv("CONFIRM_CLOSE_CALLS", "1")
+    monkeypatch.setitem(CATALOG, "women running shoes", CLOSE_CALL)
+    calls, plans = stubs
+    seen = []
+    monkeypatch.setattr(presenter.recommender, "invoke", lambda m: seen.append(m[1].content) or presenter.Recommendation(
+        best_number=1, reasons=["fits"], follow_up="Anything else?", follow_up_topic="other"))
+    plans.append({"decision": "search", "product": "running_shoes", "queries": ["women running shoes"]})
+    return seen
+
+
+def test_a_close_call_pauses_and_the_shoppers_choice_becomes_the_pick(close_call, thread_id, user_id):
+    from langgraph.types import Command
+
+    from app.agents import confirm
+
+    out, cfg = chat(thread_id, user_id, "women running shoes")
+    question = confirm.pending(chatbot.get_state(cfg))
+    assert out.get("__interrupt__") and question and not out.get("cards"), "the graph stops before presenting anything"
+    assert [c["label"] for c in question["choices"]][-1] == confirm.AUTO and len(question["candidates"]) == 2
+    assert close_call == [], "the presenter model is not called while waiting"
+
+    cheap = next(c for c in question["choices"] if c["label"].startswith("Save money"))
+    out = chatbot.invoke(Command(resume=cheap["number"]), config=cfg)
+    assert not out.get("__interrupt__") and out["cards"][0]["best"] and out["cards"][0]["title"] == "Decathlon Women Run 500"
+    assert "chosen #" in close_call[0], "the presenter is told the shopper decided"
+    assert confirm.pending(chatbot.get_state(cfg)) is None
+
+
+def test_you_decide_leaves_the_pick_to_the_model(close_call, thread_id, user_id):
+    from langgraph.types import Command
+
+    from app.agents import confirm
+
+    _, cfg = chat(thread_id, user_id, "women running shoes")
+    out = chatbot.invoke(Command(resume=confirm.AUTO), config=cfg)
+    assert out["cards"][0]["title"] == "Asics Women Gel Pro" and "chosen #" not in close_call[0]
+    assert "pick_hint" not in out["profile"]
+
+
+def test_no_pause_when_one_listing_wins_on_both_counts_or_the_shopper_said_to_decide(stubs, monkeypatch, thread_id, user_id):
+    monkeypatch.setenv("CONFIRM_CLOSE_CALLS", "1")
+    calls, plans = stubs
+    plans.append({"decision": "search", "product": "running_shoes", "queries": ["women running shoes"]})
+    monkeypatch.setitem(CATALOG, "women running shoes", [shoe("A Women", 2000, 4.6, 300), shoe("B Women", 3000, 4.4, 500), shoe("C Women", 3500, 4.2, 100)])
+    out, _ = chat(thread_id, user_id, "women running shoes")
+    assert not out.get("__interrupt__") and out["cards"], "the cheapest is also the best rated: nothing to decide"
+
+    monkeypatch.setitem(CATALOG, "women running shoes", CLOSE_CALL)
+    plans.append({"decision": "search", "product": "running_shoes", "queries": ["women running shoes"], "skip": True})
+    out, _ = chat(thread_id + "-skip", user_id, "women running shoes, you decide")
+    assert not out.get("__interrupt__") and out["cards"], "'you decide' means no questions"
+    checkpointer.delete_thread(thread_id + "-skip")
+
+
+def test_the_api_pauses_on_a_close_call_and_a_button_tap_resumes_it(close_call, stubs, thread_id):
+    import json
+
+    from tests.conftest import client_for
+
+    client = client_for(f"guest:{thread_id}")
+    first = client.post("/chat", json={"message": "women running shoes", "thread_id": thread_id}).json()
+    assert first["products"] == [] and first["confirm"]["candidates"] and first["options"][-1] == "You decide"
+    assert "close call" in first["reply"]
+
+    tapped = next(o for o in first["options"] if o.startswith("Save money"))
+    done = client.post("/chat", json={"message": tapped, "thread_id": thread_id}).json()
+    assert done["products"][0]["title"] == "Decathlon Women Run 500" and "confirm" not in done
+
+    # streaming: the same pause arrives as the final `done` event
+    stubs[1].append({"decision": "search", "product": "running_shoes", "queries": ["women running shoes"]})
+    stream_thread = thread_id + "-s"
+    events = [json.loads(line) for line in client.post("/chat/stream", json={"message": "women running shoes", "thread_id": stream_thread}).iter_lines() if line]
+    assert events[-1]["type"] == "done" and events[-1]["answer"]["confirm"] and events[-1]["answer"]["products"] == []
+    from app.graph import checkpointer
+    checkpointer.delete_thread(stream_thread)
+
+
+def test_typing_something_else_while_paused_starts_a_new_turn(close_call, stubs, thread_id):
+    from tests.conftest import client_for
+
+    calls, plans = stubs
+    client = client_for(f"guest:{thread_id}")
+    first = client.post("/chat", json={"message": "women running shoes", "thread_id": thread_id}).json()
+    assert first["confirm"]
+    plans.append({"decision": "chat", "message": "Sure, what else can I help with?"})
+    other = client.post("/chat", json={"message": "actually, never mind. thanks!", "thread_id": thread_id}).json()
+    assert other["reply"] and "confirm" not in other

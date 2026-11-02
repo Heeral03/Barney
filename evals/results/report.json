@@ -1,0 +1,98 @@
+{
+  "date": "2026-11-02",
+  "suites": {
+    "offline": {
+      "gates": [
+        {
+          "metric": "model_year_extraction.year_recall",
+          "value": 1.0,
+          "gate": ">= 0.95",
+          "pass": true
+        },
+        {
+          "metric": "model_year_extraction.false_positive_rate",
+          "value": 0.0,
+          "gate": "<= 0.0",
+          "pass": true
+        },
+        {
+          "metric": "curator_filters.recall",
+          "value": 1.0,
+          "gate": ">= 0.95",
+          "pass": true
+        },
+        {
+          "metric": "curator_filters.good_kept_rate",
+          "value": 1.0,
+          "gate": ">= 1.0",
+          "pass": true
+        },
+        {
+          "metric": "budget_parser.accuracy",
+          "value": 1.0,
+          "gate": ">= 1.0",
+          "pass": true
+        },
+        {
+          "metric": "reviewed_feedback.regression_pass_rate",
+          "value": 1.0,
+          "gate": ">= 1.0",
+          "pass": true
+        },
+        {
+          "metric": "reviewed_feedback.acceptable_kept_rate",
+          "value": 1.0,
+          "gate": ">= 1.0",
+          "pass": true
+        }
+      ],
+      "detail": {
+        "model_year_extraction": {
+          "titles": 30,
+          "accuracy": 1.0,
+          "year_recall": 1.0,
+          "false_positive_rate": 0.0,
+          "wrong": []
+        },
+        "curator_filters": {
+          "listings_to_catch": 10,
+          "caught": 10,
+          "recall": 1.0,
+          "good_listings": 19,
+          "good_kept": 19,
+          "good_kept_rate": 1.0,
+          "misses": []
+        },
+        "budget_parser": {
+          "cases": 19,
+          "accuracy": 1.0,
+          "wrong": []
+        },
+        "reviewed_feedback": {
+          "cases": 8,
+          "from_real_feedback": 0,
+          "should_exclude": 6,
+          "caught": 4,
+          "catch_rate": 0.667,
+          "acceptable": 2,
+          "acceptable_kept_rate": 1.0,
+          "regression_cases": 6,
+          "regression_pass_rate": 1.0,
+          "regressions": [],
+          "open_gaps": [
+            {
+              "id": "seed-5",
+              "title": "Replacement Ear Cushion Pads for Auralis Pulse Headphones",
+              "note": "an accessory, not the product (known gap: no accessory filter yet)"
+            },
+            {
+              "id": "seed-6",
+              "title": "Case for iPhone 15 Pro Max Shockproof Cover",
+              "note": "a case, not the phone (known gap)"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

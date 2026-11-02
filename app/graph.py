@@ -1,6 +1,7 @@
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 
+from app.agents.confirm import confirm_pick_node
 from app.agents.curator import curator_node
 from app.agents.memory import memory_in, memory_out
 from app.agents.presenter import more_node, present_node, route_after_curator, route_after_more
@@ -21,7 +22,7 @@ checkpointer.setup()  # creates the checkpoint tables on first run; a no-op afte
 #                                                               |        ^                                      |
 #                                                               |        +---- fallback sources, once ----------+
 #                                                               |                                               v
-#                                                               |                                            curator -+-> present -> END
+#                                                               |                                            curator -+-> confirm_pick -> present -> END
 #                                                               +-> more <-------------------------------------------+ (mode "more")
 #                                                                    |  ^ (nothing left: search again, appending)
 #                                                                    +--+-> END
@@ -34,6 +35,7 @@ graph.add_node("plan_research", plan_research)
 graph.add_node("worker", worker)
 graph.add_node("gather", gather)
 graph.add_node("curator", curator_node)
+graph.add_node("confirm_pick", confirm_pick_node)  # human-in-the-loop: pauses on a genuine close call
 graph.add_node("present", present_node)
 graph.add_node("more", more_node)
 graph.add_node("compare", compare_node)  # side by side: normalised specs, fit with the shopper's needs, verified prices
@@ -49,8 +51,9 @@ graph.add_conditional_edges(
 graph.add_conditional_edges("plan_research", fan_out, ["worker", "curator"])
 graph.add_edge("worker", "gather")
 graph.add_conditional_edges("gather", fan_out, ["worker", "curator"])
-graph.add_conditional_edges("curator", route_after_curator, {"present": "present", "more": "more"})
+graph.add_conditional_edges("curator", route_after_curator, {"confirm_pick": "confirm_pick", "more": "more"})
 graph.add_conditional_edges("more", route_after_more, {"plan_research": "plan_research", "__end__": END})
+graph.add_edge("confirm_pick", "present")
 graph.add_edge("present", END)
 graph.add_edge("compare", END)
 

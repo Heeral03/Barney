@@ -1,82 +1,120 @@
-# Barney: multi-agent shopping buddy
+# Barney
 
-## Run
+A multi-agent shopping assistant built on LangGraph. Barney asks a few targeted questions, searches several sources in parallel, and recommends one product with verified store prices, side-by-side comparisons and persistent personal context.
+
+## Stack
+
+- **Backend:** Python, LangGraph, FastAPI, Postgres with pgvector
+- **Frontend:** Next.js (`web/`) with Google sign-in
+- **LLM:** Groq (`openai/gpt-oss-120b` by default, with fallback models)
+- **Sources:** SerpAPI Google Shopping, SerpKite, Tavily, DuckDuckGo
+
+## Quick start
 
 ```bash
 docker compose up -d postgres          # Postgres + pgvector on localhost:5433
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.api.main:app --reload      # then open http://localhost:8000
-pytest                                 # needs the Postgres above; no LLM or search keys needed
+cp .env.example .env                   # then fill in the keys below
+uvicorn app.api.main:app --reload      # API on http://localhost:8000
+
+cd web && npm install && npm run dev   # frontend on http://localhost:3000
 ```
 
-## Sign-in (Google)
-
-The browser never says who it is. The Next.js app (`web/`) holds the Google sign-in session and signs a short-lived token for every
-request it forwards to the API; the API (`app/auth.py`) only trusts that token. Visitors who have not signed in get a random
-guest id in an httpOnly cookie, and everything they did is moved to their account the first time they sign in
-(`POST /me/claim-guest`, `app/accounts.py`).
-
-1. Google Cloud Console -> APIs & Services -> Credentials -> Create OAuth client ID (Web). Authorised JavaScript origin
-   `http://localhost:3000`; redirect URI `http://localhost:3000/api/auth/callback/google`.
-2. `cp web/.env.example web/.env.local` and fill in `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_SECRET`.
-3. Put the same `BACKEND_JWT_SECRET` (32+ characters, `openssl rand -base64 48`) in `web/.env.local` and in this folder's `.env`.
-   The API answers 503 without it, on purpose.
-
-`.env` needs `GROQ_API_KEY` and `SERPAPI_API_KEY` (`SERPKITE_API_KEY` is the second shopping source); `TAVILY_API_KEY` enables the web fallback. `DATABASE_URL` defaults to `postgresql://lily:lily@localhost:5433/lily`.
 Tables are created on first start.
 
-## Graph (`app/graph.py`)
+## Configuration
+
+Set in `.env`:
+
+| Variable | Purpose |
+|---|---|
+| `GROQ_API_KEY` | LLM access (required) |
+| `SERPAPI_API_KEY` | Primary product search (required) |
+| `SERPKITE_API_KEY` | Secondary shopping source |
+| `TAVILY_API_KEY` | Web-search fallback |
+| `DATABASE_URL` | Defaults to `postgresql://lily:lily@localhost:5433/lily` |
+| `BACKEND_JWT_SECRET` | Shared with the frontend; 32+ characters (`openssl rand -base64 48`). The API returns 503 without it. |
+| `GROQ_MODEL`, `GROQ_FALLBACK_MODELS`, `GROQ_CHAT_MODEL` | Optional model overrides |
+
+### Google sign-in
+
+The Next.js app holds the Google session and signs a short-lived token for each request it forwards to the API. The API (`app/auth.py`) trusts only that token. Guests get a random id in an httpOnly cookie, and their activity moves to their account on first sign-in (`POST /me/claim-guest`).
+
+1. In Google Cloud Console, create a Web OAuth client. Set the origin to `http://localhost:3000` and the redirect URI to `http://localhost:3000/api/auth/callback/google`.
+2. `cp web/.env.example web/.env.local` and set `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET` and `AUTH_SECRET`.
+3. Set the same `BACKEND_JWT_SECRET` in `web/.env.local` and `.env`.
+
+## Architecture
 
 ```
 START -> memory_in -> requirements -> memory_out -> supervisor -+-> (ask / chat) -> END
-                                                                +-> compare -> END   (side by side)
-                                                                +-> plan_research -> worker x N (parallel) -> gather -> curator -+-> present -> END
-                                                                |        ^------ fallback sources, once -----|                  |
-                                                                +-> more <-----------------------------------------------------+ (mode "more")
-                                                                      |  ^ (nothing left: search again, appending)
-                                                                      +--+-> END
+                                                                +-> compare -> END
+                                                                +-> plan_research -> worker x N -> gather -> curator -> confirm_pick -> present -> END
+                                                                +-> more -> END
 ```
 
-| Node | File | Job |
+| Node | File | Role |
 |---|---|---|
-| `memory_in` | `app/agents/memory.py` | LTM -> STM. Semantic search (pgvector) over this user's memories plus the facts about the person (name...). Product memories are only shown for that product. |
-| `requirements` | `app/agents/requirements.py` | LLM, one call per turn (none for small talk: a greeting or thanks goes to one plain, fast chat call in `app/agents/smalltalk.py`, no JSON and a tiny prompt). The first time a product comes up it writes the **question plan**: the 3-5 attributes that decide which products are right for that kind of product (jeans: fit, rise, wash, occasion, budget; a desk: size, material, height adjustability...), each with tappable answers. A tapped answer is recorded with **no model call**. It also picks the action (`ask`, `search`, `alternatives`, `chat`), writes the search queries, and says what is worth remembering. A budget the model misses is parsed from the message. |
-| `memory_out` | `app/agents/memory.py` | Saves what the requirements agent judged worth remembering (lasting facts and tastes: sizes, fit, colour, brand; no extra LLM call), the lasting answers to the question plan (one slot per question, so they never overwrite each other), and a pick the shopper accepts. Then trims the chat and folds old turns into a rolling summary. |
-| `supervisor` | `app/agents/supervisor.py` | No LLM. Understand first: asks the next unanswered attribute of the question plan (at most 4 before results; "Just show me options" is always available from the second question). No repeated topics, no search without a product. Routes. |
-| `plan_research`, `worker`, `gather` | `app/agents/researcher.py` | No LLM. One worker per query runs in parallel (LangGraph `Send`), each with a 12s limit. If the first wave finds too few priced listings, one fallback wave runs in parallel: a plain query, Tavily and DuckDuckGo. "More options" searches include the web sources from the start. Searches are cached for 15 minutes. |
-| `curator` | `app/agents/curator.py` | No LLM. De-duplicates, drops listings for the wrong audience (Men's shoes in a women's search), applies the budget, ranks by rating, reviews and relevance, keeps the cheapest fit on the list, tags listings, and keeps a ranked `reserve` for more options. |
-| `present` | `app/agents/presenter.py` | LLM. The single best pick with 2-3 reasons and one tailored follow-up question with tappable answers (a trade-off in the results, or a budget question built from the real price range). Pictures for the top candidates are fetched while the model thinks. |
-| `compare` | `app/agents/table.py` | LLM. The side-by-side view: specifications read from the listing titles and normalised across options (never guessed: missing stays "not stated"), a check of each option against what the shopper said (the budget is computed from real prices), the verified price, the seller and a buy link per option, and a verdict that speaks to the shopper and the current pick. |
-| `more` | `app/agents/presenter.py` | LLM. The next 4 listings the shopper has not seen with trade-offs against the pick: from what was found, then the reserve, then a new search that appends. |
+| `memory_in` / `memory_out` | `app/agents/memory.py` | Load relevant long-term memories (pgvector) and save lasting preferences. Trims chat and keeps a rolling summary. |
+| `requirements` | `app/agents/requirements.py` | LLM. Builds a per-product question plan, picks the next action, writes search queries. Small talk goes to `smalltalk.py`. |
+| `supervisor` | `app/agents/supervisor.py` | Rule-based routing. Asks unanswered questions (at most 4 before results), then searches. |
+| `plan_research`, `worker`, `gather` | `app/agents/researcher.py` | Parallel searches via LangGraph `Send`, with a fallback wave and a 15-minute cache. |
+| `curator` | `app/agents/curator.py` | De-duplicates, filters by audience and budget, ranks, and keeps a reserve for "more". |
+| `confirm_pick` | `app/agents/confirm.py` | Human-in-the-loop. Pauses the graph on a genuine close call (see below). No LLM. |
+| `present` | `app/agents/presenter.py` | LLM. Recommends the best pick with reasons and a follow-up question. |
+| `compare` | `app/agents/table.py` | LLM. Side-by-side specs, budget check and verdict. |
+| `more` | `app/agents/presenter.py` | LLM. Next set of options with trade-offs against the pick. |
 
-**Wishlist** (`app/wishlist.py`): the heart on each card saves a listing. Each new heart is turned into taste memories ("Likes dark indigo jeans"), and the recent ones are shown to the requirements agent.
+### Human in the loop
 
-**Prices** (`app/pricing.py`): the same product is often listed at very different prices on different stores. For the pick, the app
-asks SerpAPI for every store that sells it (price + direct link), marks which are reliable (big marketplaces and brand stores),
-re-reads the price from the cheapest stores' own pages (`app/sources/verify.py`) and shows the cheapest RELIABLE store with its own
-link. A price confirmed on the page gets a ✓; a page showing a different price replaces the listed one; a store that blocks
-automated checks (AJIO, often Amazon) is shown as "as listed", never as confirmed. A cheaper store we cannot vouch for is mentioned,
-not recommended. Every card shown is resolved this way, so the shopper never leaves Barney to compare: the buy link is always the seller's own
-page (never Google). A card whose lookup failed offers a "Compare prices" button (`POST /compare`).
+Two places keep a person in control.
 
-**What Barney is for.** Google finds products; Barney helps decide which one is worth buying *for you*: needs-based discovery (a question
-plan per product), decision-ready comparisons (the `compare` view and the verified store prices), and persistent personal context made
-explicit ("Matched on: Straight fit · High rise · under ₹1,500 · 🧠 ...", the wishlist, and saved preferences).
+**1. Close-call confirmation (runtime).** After ranking, `confirm_pick` checks whether the top three listings contain a real trade-off: one at least 25% cheaper and another rated at most 0.3 stars higher, both with 20 or more reviews. If so, it calls LangGraph `interrupt()` and the shopper chooses "Save money", "Higher rated" or "You decide". The paused run is held by the Postgres checkpointer, so it survives a refresh or restart. The question is returned as a normal reply with option buttons, so a tap resumes the run through `Command(resume=...)`; typing anything else starts a new turn. The presenter then honours the choice. It never pauses when one listing wins on both counts, when the shopper said "you decide", or when nothing fits the budget. Set `CONFIRM_CLOSE_CALLS=0` to switch it off.
 
-Sources: SerpAPI Google Shopping (primary: ~40 listings with pictures per call; free plan = 250 searches a month, so it takes the lead
-query only and is skipped when nearly used up), then SerpKite for the other queries, then Tavily (restricted to Indian retailers) and DuckDuckGo as fallbacks; web results are
-kept only if the URL is a single product page. SerpKite's free plan is 500 credits per day: when it runs out, the app notices and
-uses the web sources until 00:00 UTC without waiting on it.
+**2. Feedback review (offline).** Thumbs-down and "wrong" feedback goes into a queue with the shopper's request attached. A reviewer labels each item `should_exclude` or `acceptable`, and the labels are exported as eval cases that the curator's filters are scored against. Confirmed failures become regression tests, and unfixed ones show up as a backlog.
 
-LLM calls per turn: `requirements` (1; none when a tapped answer leaves more questions), plus `present` or `more` (1) when listings are shown, and a summary call once the
-chat passes 12 messages.
+```bash
+python -m evals.review             # label the queue interactively
+python -m evals.review --export    # append reviewed items to evals/datasets/reviewed.jsonl
+python -m evals.run_reviewed       # score the filters against them
+```
 
-**Models** (`app/llm.py`): Groq limits tokens per model per day. The models are tried in order (`GROQ_MODEL`, then
-`GROQ_FALLBACK_MODELS`); one that is out of quota fails instantly (the client's own sleep-and-retry is off, it used to hang a turn for
-up to a minute) and is skipped until Groq says it has recovered. General conversation uses `GROQ_CHAT_MODEL` (default
-`openai/gpt-oss-20b`) with the same fallbacks. If a model answers in prose instead of JSON, the reply is recovered from its text.
+The same queue is available to admins (`ADMIN_USERS`) at `GET /admin/review` and `POST /admin/review/{id}`.
 
-To add a source: write a function returning offers, add a task type in `app/agents/researcher.py` (`_run`, `gather`).
+### Supporting modules
 
-Prompts live in `prompts/barney_*.txt`. LLM output is JSON validated with pydantic (`Structured` in `app/llm.py`), with retries and recovery for gpt-oss quirks on Groq.
+- **Pricing** (`app/pricing.py`, `app/sources/verify.py`): finds every store selling the pick, re-reads prices from store pages, and links to the cheapest reliable seller. Unverifiable prices are labelled "as listed".
+- **Wishlist** (`app/wishlist.py`): saved items become taste memories.
+- **LLM layer** (`app/llm.py`): ordered model fallback on quota errors, pydantic-validated JSON output with recovery.
+- **Prompts:** `prompts/barney_*.txt`.
+
+To add a source, write a function that returns offers and register a task type in `app/agents/researcher.py`.
+
+## Testing
+
+```bash
+pytest                              # requires Postgres; no LLM or search keys needed
+python -m evals.run_evals           # offline evals with pass/fail gates (no LLM, no network)
+python -m evals.run_evals --agent   # also score the requirements agent (calls Groq)
+python -m evals.run_evals --e2e     # also run the end-to-end task-completion eval
+```
+
+| Eval | Measures | Data |
+|---|---|---|
+| `run_filters` | Model-year extraction; curator filters catching stale, wrong-spec, wrong-audience and junk listings while keeping good ones | 30 titles, 8 scenarios |
+| `run_requirements` | Budget parsing (offline); the requirements agent's decision, product, budget, skip, question-plan shape and query hygiene | 19 phrases, 20 cases |
+| `run_reviewed` | Curator filters against listings that human reviewers flagged; regressions must stay fixed | `evals/datasets/reviewed.jsonl` |
+| `run_task_completion` | End-to-end: does Barney pick a correct listing, avoid traps and finish within 3 turns (DeepEval) | 8 scenarios |
+
+`run_evals` exits non-zero when a metric falls below its gate. Agent-level results vary between runs because they depend on the LLM, so use `python -m evals.run_requirements --repeat 3` for stable numbers. The `seed-*` rows in the reviewed dataset are hand-written starters; real cases arrive through the review tool.
+
+## Repository layout
+
+```
+app/        LangGraph agents, API, memory, search sources
+web/        Next.js frontend
+prompts/    LLM prompts
+evals/      Evaluation scripts, datasets and the reviewer tool
+tests/      Unit and graph tests
+```

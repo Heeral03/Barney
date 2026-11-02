@@ -14,10 +14,12 @@ from pathlib import Path
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 from groq import RateLimitError
 from pydantic import BaseModel
 
-from app import accounts, alerts, analytics, auth, history, overview, pricing, reviews, settings, share, signals, timing, wishlist
+from app import accounts, alerts, analytics, auth, history, overview, pricing, review, reviews, settings, share, signals, timing, wishlist
+from app.agents import confirm
 from app.agents.common import as_memory
 from app.graph import chatbot
 from app.memory import store as ltm
@@ -68,7 +70,7 @@ def chat(req: ChatRequest, me: auth.Caller = Depends(auth.current_user)):
     config = _config(req, me)
     started = time.monotonic()
     try:
-        result = chatbot.invoke(_input(req), config=config)
+        result = chatbot.invoke(_input(req, config), config=config)
         answer = _answer(result)
     except Exception as e:
         answer = _failure(e)
@@ -85,11 +87,31 @@ def _config(req: ChatRequest, me: auth.Caller) -> dict:
     return {"configurable": {"thread_id": req.thread_id, "user_id": me.id, "memory_id": _mem(me)}, "recursion_limit": 25}
 
 
-def _input(req: ChatRequest) -> dict:
+def _input(req: ChatRequest, config: dict):
+    """The turn's input. If the thread is paused on a close-call question and the message is one of its buttons, that tap
+    resumes the paused run; anything else starts a normal new turn."""
+    try:
+        question = confirm.pending(chatbot.get_state(config))
+    except Exception as e:  # an unreadable checkpoint must never block a chat
+        log.warning("could not check for a pending question: %s", e)
+        question = None
+    if question:
+        is_answer, value = confirm.match_choice(question, req.message)
+        if is_answer:
+            return Command(resume=value)
     return {"messages": [HumanMessage(content=req.message)], "answers": req.answers or {}, "form": None}
 
 
+def _paused(question: dict) -> dict:
+    """The answer shown while the graph waits for the shopper's decision."""
+    return {"reply": question["question"], "options": [c["label"] for c in question["choices"]],
+            "products": [], "table": None, "form": None, "confirm": {"candidates": question["candidates"]},
+            "memory": {"recalled": [], "saved": []}}
+
+
 def _answer(result: dict) -> dict:
+    if result.get("__interrupt__"):
+        return _paused(result["__interrupt__"][0].value)
     return {
         "reply": result["messages"][-1].content,
         "options": result.get("options") or [],
@@ -110,6 +132,8 @@ def _failure(e: Exception) -> dict:
 
 def _kind(answer: dict) -> str:
     """What the turn amounted to, for the numbers: a questionnaire, results, nothing found, a comparison, or just talk."""
+    if answer.get("confirm"):
+        return "confirm"
     if answer.get("form"):
         return "form"
     if answer.get("products"):
@@ -127,7 +151,7 @@ def _save_turn(req: ChatRequest, me: auth.Caller, answer: dict, started: float |
     try:  # the transcript is for the page (errors included, so a refresh shows what you saw); it must not lose the answer
         history.append(req.thread_id, me.id, [
             ("user", req.message, {}),
-            ("assistant", answer["reply"], {k: answer[k] for k in ("options", "products", "memory", "table", "form") if k in answer}),
+            ("assistant", answer["reply"], {k: answer[k] for k in ("options", "products", "memory", "table", "form", "confirm") if k in answer}),
         ])
     except Exception as e:
         log.warning("could not save the transcript: %s", e)
@@ -154,9 +178,11 @@ def _turn_events(req: ChatRequest, me: auth.Caller):
     config = _config(req, me)
     started, first, final = time.monotonic(), None, None
     try:
-        for mode, chunk in chatbot.stream(_input(req), config=config, stream_mode=["updates", "values"]):
+        for mode, chunk in chatbot.stream(_input(req, config), config=config, stream_mode=["updates", "values"]):
             if mode == "values":
                 final = chunk
+            elif "__interrupt__" in chunk:  # paused for the shopper's decision (stream also yields the final values)
+                final = {"__interrupt__": chunk["__interrupt__"]}
             else:
                 for node, update in chunk.items():
                     if isinstance(update, dict):
@@ -433,9 +459,35 @@ def track(req: TrackRequest, me: auth.Caller = Depends(auth.current_user)):
 
 @app.get("/metrics")
 def metrics(days: int = 30, me: auth.Caller = Depends(auth.current_user)):
+    _require_admin(me)
+    return analytics.summary(min(max(days, 1), 365))
+
+
+def _require_admin(me: auth.Caller) -> None:
     if me.id not in {a.strip() for a in os.getenv("ADMIN_USERS", "").split(",") if a.strip()}:
         raise HTTPException(403, "admins only")
-    return analytics.summary(min(max(days, 1), 365))
+
+
+class ReviewRequest(BaseModel):
+    label: str
+    note: str = ""
+
+
+@app.get("/admin/review")
+def review_queue(limit: int = 50, me: auth.Caller = Depends(auth.current_user)):
+    """Thumbs-down feedback waiting for a human to say whether Barney was wrong."""
+    _require_admin(me)
+    return {"items": review.queue(min(max(limit, 1), 200)), "labels": list(review.LABELS)}
+
+
+@app.post("/admin/review/{feedback_id}")
+def review_label(feedback_id: int, req: ReviewRequest, me: auth.Caller = Depends(auth.current_user)):
+    _require_admin(me)
+    if req.label not in review.LABELS:
+        raise HTTPException(400, f"label must be one of {', '.join(review.LABELS)}")
+    if not review.label(feedback_id, req.label, req.note, me.id):
+        raise HTTPException(404, "no such item waiting for review")
+    return {"ok": True}
 
 
 # ----------------------------------------------------------------------------- reviews, sharing

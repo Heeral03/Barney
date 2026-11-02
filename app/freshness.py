@@ -7,7 +7,9 @@ anything not recognised has no year and is never treated as old.
 import re
 from datetime import date
 
-_YEAR = re.compile(r"(?<![\d₹.,])(20[0-3]\d)(?![\d,])")
+# A four-digit number is a year unless it is a quantity: "2000W", "2024 sheets", "Pack of 2024".
+_NOT_YEAR_AFTER = r"\s?(?:w|watts?|mah|gb|tb|mp|hz|ml|mm|cm|kg|g|l|pcs?|pieces?|sheets?|units?|items?|count|pack|packs|rpm|lumens?|pa)\b"
+_YEAR = re.compile(rf"(?<![\d₹.,])(?<!\bof )(?<!\bx )(20[0-3]\d)(?![\d,])(?!{_NOT_YEAR_AFTER})", re.I)
 
 # Intel Core generation -> year it launched (the number in "13th Gen" and the first digits of "i7-1360P" / "i7-13650HX").
 _INTEL = {6: 2015, 7: 2016, 8: 2017, 9: 2018, 10: 2019, 11: 2021, 12: 2022, 13: 2023, 14: 2024}

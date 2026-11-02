@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.agents.smalltalk import is_small_talk, small_talk_reply
 from app.agents.common import answered_topics, known_text, last_user_text, next_attribute, topic_key
-from app.commands import MAX_QUESTIONS_BEFORE_RESULTS, NOT_SURE, SKIP, is_command
+from app.commands import MAX_QUESTIONS_BEFORE_RESULTS, NOT_SURE, SKIP, is_command, wants_results_now
 from app.memory import store as ltm_store
 from app.llm import Structured, load_prompt, prose_from_error
 from app.state import chatState
@@ -285,6 +285,9 @@ def requirements_node(state: chatState, config: RunnableConfig | None = None, *,
 
     if d.budget_min is None and d.budget_max is None:  # the model often leaves a stated budget out
         d.budget_min, d.budget_max = parse_budget(said)
+
+    if not d.skip and d.decision in ("ask", "search") and wants_results_now(said):
+        d.skip = True  # the model often misses "you decide" / "surprise me"
 
     profile, restarted = apply_plan(profile, d)
     if store is not None and profile.get("product") and profile.get("attrs") and not profile.get("prefilled"):
