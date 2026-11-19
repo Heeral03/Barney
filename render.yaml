@@ -1,0 +1,44 @@
+# Render blueprint for the Barney API (the Next.js app goes on Vercel; see README "Deploying").
+# New > Blueprint > pick this repo. Fill in the `sync: false` values in the dashboard when asked.
+databases:
+  - name: barney-db
+    plan: basic-256mb        # needs the pgvector extension, which Render Postgres supports
+    databaseName: barney
+    user: barney
+
+services:
+  - type: web
+    name: barney-api
+    runtime: docker
+    plan: starter            # 512 MB. With EMBED_API_URL set the app idles near 150 MB; with local embeddings it is ~300 MB.
+    healthCheckPath: /
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    buildFilter:
+      paths: [app/**, prompts/**, frontend/**, requirements.txt, Dockerfile]
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: barney-db, property: connectionString }
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: BACKEND_JWT_SECRET
+        sync: false           # the same value you give the Next.js app
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SERPAPI_API_KEY
+        sync: false
+      - key: SERPKITE_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      # Remote embeddings keep the model out of RAM (recommended on 512 MB). Leave these out to embed locally.
+      - key: EMBED_API_URL
+        sync: false           # e.g. https://api.openai.com/v1/embeddings
+      - key: EMBED_API_KEY
+        sync: false
+      - key: EMBED_API_MODEL
+        sync: false           # e.g. text-embedding-3-small
+      - key: EMBED_API_DIMENSIONS
+        value: "384"
+      - key: ALERT_INTERVAL_MINUTES
+        value: "360"

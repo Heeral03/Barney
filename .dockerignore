@@ -1,0 +1,9 @@
+.venv
+.git
+.env
+web
+tests
+evals
+.deepeval
+**/__pycache__
+.pytest_cache

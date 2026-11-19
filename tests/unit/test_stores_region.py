@@ -62,3 +62,29 @@ def test_the_search_uses_the_shoppers_market(monkeypatch):
 @pytest.mark.parametrize("country,expected", [("IN", "₹1,200"), ("US", "$1,200")])
 def test_money_follows_the_market(country, expected):
     assert region.money(1200, country) == expected
+
+
+# ----------------------------------------------------------------- remote embeddings (keeps the model out of RAM)
+def test_remote_embeddings_are_normalised_ordered_and_size_checked(monkeypatch):
+    import app.memory.embeddings as emb
+
+    sent = []
+    dims = emb.DIMS
+
+    class Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"index": 1, "embedding": [0.0, 2.0] + [0.0] * (dims - 2)},
+                                          {"index": 0, "embedding": [3.0, 4.0] + [0.0] * (dims - 2)}]}
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: sent.append(kw["json"]) or Resp())
+    monkeypatch.setattr(emb, "REMOTE_URL", "https://embeddings.example/v1/embeddings")
+    monkeypatch.setenv("EMBED_API_MODEL", "m")
+    monkeypatch.setenv("EMBED_API_DIMENSIONS", str(emb.DIMS))
+    first, second = emb._remote(["a", "b"])
+    assert first[:2] == [0.6, 0.8] and second[:2] == [0.0, 1.0]  # the API's order is restored, vectors are unit length
+    assert sent[0]["model"] == "m" and sent[0]["dimensions"] == emb.DIMS
+
+    monkeypatch.setattr(emb, "DIMS", 5)
+    with pytest.raises(ValueError, match="MEMORY_EMBED_DIMS"):
+        emb._remote(["a", "b"])

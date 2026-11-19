@@ -102,6 +102,27 @@ The same queue is available to admins (`ADMIN_USERS`) at `GET /admin/review` and
 
 To add a source, write a function that returns offers and register a task type in `app/agents/researcher.py`.
 
+## Deploying
+
+The API (FastAPI) goes on Render, the web app (Next.js) on Vercel, and Postgres with pgvector on Render. Vercel also sends the visitor's country, which Barney uses to choose stores that deliver there.
+
+**1. API on Render.** New > Blueprint > this repo; `render.yaml` creates the web service (Docker) and the database. Fill in the secrets when asked: `GROQ_API_KEY`, `SERPAPI_API_KEY`, `BACKEND_JWT_SECRET` (`openssl rand -base64 48`), and optionally `SERPKITE_API_KEY` and `TAVILY_API_KEY`. Tables and the pgvector extension are created on first start.
+
+**2. Keep it inside 512 MB.** The app itself uses about 110 MB. The local embedding model adds about 180 MB, so with it the API idles near 300 MB and goes over 512 MB under load. On a 512 MB instance use a remote embeddings API, which keeps the model out of memory:
+
+```
+EMBED_API_URL=https://api.openai.com/v1/embeddings   # any OpenAI-compatible endpoint
+EMBED_API_KEY=...
+EMBED_API_MODEL=text-embedding-3-small
+EMBED_API_DIMENSIONS=384                              # must equal MEMORY_EMBED_DIMS (384)
+```
+
+Build with `--build-arg PRELOAD_EMBEDDINGS=0` (Render: set it under the service's Docker build arguments) so the unused model isn't baked into the image. Also keep a single worker (the Dockerfile does), and never run the Next.js app on the same instance. Use a fresh database when switching embedding provider, because stored vectors from one model mean nothing to another.
+
+**3. Web on Vercel.** Import the repo with the root directory set to `web`. Environment: `BARNEY_API` (your Render URL, no trailing slash), `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, and the same `BACKEND_JWT_SECRET` as the API. In Google Cloud add your Vercel domain as an authorised origin and `https://<domain>/api/auth/callback/google` as a redirect URI.
+
+**4. Background prices.** A free Render web service sleeps after 15 minutes, so the in-process price check stops with it. For the "Barney noticed" feed add a Render cron job running `python -m app.worker --once` (same image and env vars), and set `ALERTS=off` on the API.
+
 ## Testing
 
 ```bash
