@@ -6,6 +6,7 @@ import { compact, inr } from "@/lib/format";
 import type { CompareTable, TableRow } from "@/lib/types";
 import { CheckIcon, StarIcon } from "../icons";
 import { Img } from "../Img";
+import { BuyButton } from "./BuyButton";
 
 const Cell = ({ best, win, children, head }: { best?: boolean; win?: boolean; children: React.ReactNode; head?: boolean }) => {
   const Tag = head ? "th" : "td";
@@ -146,7 +147,7 @@ export function ComparisonTable({ table, title, readOnly = false }: { table: Com
                 <Cell key={r.number} best={r.best}>
                   <p>{r.seller}{r.seller_trusted === false ? " ⚠" : ""}</p>
                   {r.link ? (
-                    <a href={r.link} target="_blank" rel="noopener noreferrer" onClick={() => !readOnly && api.event("open", "", r.title)} className="mt-2 inline-block rounded-lg bg-ink px-3.5 py-1.5 text-[12.5px] text-white transition hover:bg-ink/85">Buy</a>
+                    <BuyButton link={r.link} title={r.title} seller={r.seller} verified={r.price_verified} price={r.price_inr} readOnly={readOnly} compact />
                   ) : (
                     <p className="mt-1 text-[12px] text-faint">no seller link yet</p>
                   )}

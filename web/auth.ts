@@ -5,6 +5,7 @@ import Google from "next-auth/providers/google";
 // Reads AUTH_SECRET, AUTH_GOOGLE_ID and AUTH_GOOGLE_SECRET from the environment.
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [Google],
+  pages: { signIn: "/signin", error: "/signin" },
   session: { strategy: "jwt" },
   callbacks: {
     session({ session, token }) {

@@ -18,23 +18,25 @@ from langgraph.types import Command
 from groq import RateLimitError
 from pydantic import BaseModel
 
-from app import accounts, alerts, analytics, auth, history, overview, pricing, review, reviews, settings, share, signals, timing, wishlist
+from app import accounts, alerts, analytics, auth, feed, history, overview, pricing, region, review, reviews, settings, share, signals, timing, wishlist, worker
 from app.agents import confirm
 from app.agents.common import as_memory
 from app.graph import chatbot
 from app.memory import store as ltm
 from app.memory.embeddings import warm_up
+from app.stores import usable as stores_usable
 
 log = logging.getLogger(__name__)
 ALERT_EVERY_MINUTES = int(os.getenv("ALERT_INTERVAL_MINUTES", "360"))
 
 
 async def _price_watch():
-    """Every few hours: re-read the price of each wishlisted listing and raise alerts. Off when ALERTS=off."""
+    """Every few hours: refresh prices and build the "Barney noticed" feed. Off when ALERTS=off, which is what to set when
+    `python -m app.worker` runs as its own process (the better setup: the web server stays free of background work)."""
     while True:
         await asyncio.sleep(ALERT_EVERY_MINUTES * 60)
         try:
-            log.info("price watch: %s", await asyncio.to_thread(alerts.check_all))
+            log.info("price watch: %s", await asyncio.to_thread(worker.run_once))
         except Exception:
             log.exception("price watch failed")
 
@@ -83,8 +85,13 @@ def _mem(me: auth.Caller) -> str:
     return settings.memory_id(me.id, me.profile)
 
 
+def _country(me: auth.Caller) -> str:
+    """Where this shopper is: the country they chose in Preferences, else the one detected from their connection, else India."""
+    return region.resolve(settings.get(me.id).get("country"), me.country)
+
+
 def _config(req: ChatRequest, me: auth.Caller) -> dict:
-    return {"configurable": {"thread_id": req.thread_id, "user_id": me.id, "memory_id": _mem(me)}, "recursion_limit": 25}
+    return {"configurable": {"thread_id": req.thread_id, "user_id": me.id, "memory_id": _mem(me), "country": _country(me)}, "recursion_limit": 25}
 
 
 def _input(req: ChatRequest, config: dict):
@@ -99,7 +106,7 @@ def _input(req: ChatRequest, config: dict):
         is_answer, value = confirm.match_choice(question, req.message)
         if is_answer:
             return Command(resume=value)
-    return {"messages": [HumanMessage(content=req.message)], "answers": req.answers or {}, "form": None}
+    return {"messages": [HumanMessage(content=req.message)], "answers": req.answers or {}, "form": None, "country": config["configurable"]["country"]}
 
 
 def _paused(question: dict) -> dict:
@@ -238,9 +245,11 @@ class WishlistRequest(BaseModel):
 
 @app.post("/wishlist")
 def add_to_wishlist(req: WishlistRequest, background: BackgroundTasks, me: auth.Caller = Depends(auth.current_user)):
-    item_id = wishlist.add(me.id, req.offer, req.product)
+    link = req.offer.get("link")  # the price watcher will fetch this page, so only a genuine store's page is kept
+    offer = {**req.offer, "link": link if link and stores_usable(link, _country(me)) else None}
+    item_id = wishlist.add(me.id, offer, req.product)
     if item_id is not None:  # a new heart teaches Barney a taste; the model call runs after the response
-        background.add_task(wishlist.learn_taste, ltm.ltm, me.id, req.offer, req.product, _mem(me))
+        background.add_task(wishlist.learn_taste, ltm.ltm, me.id, offer, req.product, _mem(me))
     return {"id": item_id, "new": item_id is not None}
 
 
@@ -262,7 +271,7 @@ class CompareRequest(BaseModel):
 @app.post("/compare")
 def compare_prices(req: CompareRequest, me: auth.Caller = Depends(auth.current_user)):
     """Every store's price for one listing (the card's "Compare prices" button). Costs one SerpAPI search."""
-    info = pricing.compare(req.token)
+    info = pricing.compare(req.token, _country(me))
     slim = pricing.apply_to_offer({}, info)
     return {"stores": slim.get("stores", []), "cheapest": {k: slim.get(k) for k in ("price_display", "price_inr", "seller", "link", "link_domain", "price_verified")} if info.get("cheapest") else None,
             "text": pricing.comparison_text(slim.get("stores"))}
@@ -343,18 +352,29 @@ def claim_guest(req: ClaimRequest, me: auth.Caller = Depends(auth.signed_in)):
 
 
 # ----------------------------------------------------------------------------- settings, profiles, onboarding
+def _settings(me: auth.Caller) -> dict:
+    """Settings plus where Barney thinks the shopper is, and the countries he can search."""
+    s = settings.get(me.id)
+    return {**s, "detected_country": region.normalize(me.country) or None, "effective_country": region.resolve(s.get("country"), me.country),
+            "markets": [{"code": m.code, "name": m.name} for m in region.MARKETS.values()]}
+
+
 @app.get("/settings")
 def get_settings(me: auth.Caller = Depends(auth.current_user)):
-    return settings.get(me.id)
+    return _settings(me)
 
 
 class SettingsRequest(BaseModel):
     learning: bool | None = None
+    country: str | None = None  # a market code; "" goes back to the detected country
 
 
 @app.put("/settings")
 def put_settings(req: SettingsRequest, me: auth.Caller = Depends(auth.current_user)):
-    return settings.update(me.id, learning=req.learning)
+    if req.country and req.country.strip() and not region.supported(req.country):
+        raise HTTPException(400, "Barney does not search that country yet")
+    settings.update(me.id, learning=req.learning, country=req.country)
+    return _settings(me)
 
 
 class ProfileRequest(BaseModel):
@@ -404,19 +424,34 @@ def onboarding(req: OnboardingRequest, me: auth.Caller = Depends(auth.current_us
 
 # ----------------------------------------------------------------------------- what they do: suggestions, feedback, numbers
 class EventRequest(BaseModel):
-    kind: str
+    kind: str  # open | compare_store | buy ("Buy this") | check ("Check this out")
     product: str = ""
     title: str
+    link: str | None = None  # where the button sent them, so Barney can tell them if it gets cheaper
+    price: float | None = None
 
 
 @app.post("/events")
 def event(req: EventRequest, background: BackgroundTasks, me: auth.Caller = Depends(auth.current_user)):
     """The shopper opened a listing. Recorded only while learning is on; patterns become suggestions, never memories."""
-    recorded = signals.record_event(me.id, _mem(me), req.kind, req.product, req.title)
+    link = req.link if req.link and stores_usable(req.link, _country(me)) else None  # only a genuine store's link is ever kept
+    recorded = signals.record_event(me.id, _mem(me), req.kind, req.product, req.title, link, req.price)
     if recorded:
         background.add_task(signals.distil, _mem(me), req.product[:60])
     analytics.track(me.id, "card_open", kind=req.kind)
     return {"recorded": recorded}
+
+
+@app.get("/feed")
+def get_feed(me: auth.Caller = Depends(auth.current_user)):
+    """What Barney noticed without being asked: price drops on things the shopper saved or looked at."""
+    return feed.unseen(me.id)
+
+
+@app.post("/feed/seen")
+def feed_seen(me: auth.Caller = Depends(auth.current_user)):
+    feed.mark_seen(me.id)
+    return {"ok": True}
 
 
 @app.get("/suggestions")

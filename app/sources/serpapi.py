@@ -1,6 +1,6 @@
 """SerpAPI: the primary product source (https://serpapi.com).
 
-- `search_shopping`: Google Shopping for India. One call returns ~40 listings with price, seller, rating, picture and a
+- `search_shopping`: Google Shopping in the shopper's market (India by default). One call returns ~40 listings with price, seller, rating, picture and a
   token, so no per-listing picture lookups are needed.
 - `stores`: for one listing, every store that sells it, with that store's price and a direct link (the Google
   "immersive product" API). This is what makes cross-store price comparison possible.
@@ -15,6 +15,7 @@ import time
 import httpx
 from dotenv import load_dotenv
 
+from app import region
 from app.sources.cache import ttl_cache
 
 load_dotenv()
@@ -70,9 +71,10 @@ def _get(params: dict, timeout: float = 15) -> dict:
 
 
 @ttl_cache(900)
-def search_shopping(query: str) -> list[dict]:
-    """Google Shopping India for one query, in relevance order."""
-    data = _get({"engine": "google_shopping", "q": query, "gl": "in", "hl": "en", "location": "India"})
+def search_shopping(query: str, country: str = "IN") -> list[dict]:
+    """Google Shopping in the shopper's market for one query, in relevance order."""
+    m = region.market(country)
+    data = _get({"engine": "google_shopping", "q": query, "gl": m.gl, "hl": m.hl, "location": m.location})
     offers = []
     for row in data.get("shopping_results") or []:
         price, title = row.get("extracted_price"), row.get("title")

@@ -55,6 +55,11 @@ export default function PreferencesPage() {
     await refreshSettings();
   }
 
+  async function setCountry(code: string) {
+    await api.setCountry(code);
+    await refreshSettings();
+  }
+
   const who = profile === "me" ? "you" : profile;
 
   return (
@@ -75,6 +80,24 @@ export default function PreferencesPage() {
         >
           <span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${(settings?.learning ?? true) ? "left-6" : "left-1"}`} />
         </button>
+      </section>
+
+      <section className="mb-10 rounded-2xl border border-line bg-card p-5">
+        <h2 className="font-serif text-[20px]">Where you shop from</h2>
+        <p className="mt-1.5 max-w-lg text-[13.5px] leading-6 text-muted">
+          I only suggest stores that are genuine and take orders to this country, and I search that country’s listings.
+          {settings?.detected_country && !settings.country ? ` I picked ${settings.detected_country} from your connection.` : ""}
+        </p>
+        <label className="mt-3 block text-[13px] text-muted" htmlFor="country">Country</label>
+        <select
+          id="country"
+          value={settings?.country ?? ""}
+          onChange={(e) => void setCountry(e.target.value)}
+          className="mt-1 rounded-lg border border-line-strong bg-card px-3 py-2 text-[14px]"
+        >
+          <option value="">Detect automatically ({settings?.effective_country ?? "IN"})</option>
+          {(settings?.markets ?? []).map((m) => <option key={m.code} value={m.code}>{m.name.replace(/^the /, "").replace(/^./, (c) => c.toUpperCase())}</option>)}
+        </select>
       </section>
 
       {suggestions.length > 0 && (

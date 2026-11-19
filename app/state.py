@@ -36,6 +36,8 @@ class chatState(TypedDict, total=False):
     shown: list[int]
     # {"raw": n, "cheapest": price} from the last search, used to explain empty results.
     search_meta: dict
+    # Where the shopper is (two-letter country code). Searches use that market and only stores that deliver there.
+    country: str
     # Short-term memory: a rolling summary of the older messages that were trimmed from `messages`.
     summary: str
     # Short-term memory: long-term memories loaded into this thread because they matched a query.

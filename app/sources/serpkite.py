@@ -51,7 +51,7 @@ def _is_http(url) -> bool:
     return isinstance(url, str) and urlparse(url).scheme in ("http", "https")
 
 
-def find_media(title: str, seller: str) -> dict:
+def find_media(title: str, seller: str, country: str = "IN") -> dict:
     """Best-effort product page link and image for one listing.
 
     The shopping endpoint returns neither, so we run an image search for the title.
@@ -61,7 +61,8 @@ def find_media(title: str, seller: str) -> dict:
     if quota_exhausted():
         return {}
     try:
-        res = sk.images(title, country="in", num=6)
+        from app import region
+        res = sk.images(title, country=region.market(country).gl, num=6)
         res = res.model_dump() if hasattr(res, "model_dump") else res
     except Exception as e:
         note_failure(e)
@@ -83,6 +84,6 @@ def find_media(title: str, seller: str) -> dict:
     return {"link": best["link"], "image_url": best["image_url"], "link_domain": best.get("domain")}
 
 
-def find_media_many(items: list[tuple[str, str]]) -> list[dict]:
+def find_media_many(items: list[tuple], country: str = "IN") -> list[dict]:
     with ThreadPoolExecutor(max_workers=max(len(items), 1)) as pool:
-        return list(pool.map(lambda it: find_media(*it), items))
+        return list(pool.map(lambda it: find_media(it[0], it[1], country), items))

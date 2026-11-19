@@ -1,4 +1,4 @@
-import type { Budget, ChatResponse, CompareTable, PriceAlert, ReviewSummary, Settings, SharedComparison, StreamEvent, Suggestion, ComparisonCard, Memory, Offer, Overview, Store, Turn, WishItem } from "./types";
+import type { FeedItem, Budget, ChatResponse, CompareTable, PriceAlert, ReviewSummary, Settings, SharedComparison, StreamEvent, Suggestion, ComparisonCard, Memory, Offer, Overview, Store, Turn, WishItem } from "./types";
 
 // `/api/*` is forwarded to the Barney back end by app/api/[...path]/route.ts, which adds who is calling.
 // The shopping profile ("me", "Mom"...) is only a label inside the signed-in account; the back end checks it.
@@ -73,7 +73,12 @@ export const api = {
   addProfile: (name: string) => call<Settings>("/profiles", json("POST", { name })),
   removeProfile: (name: string) => call<Settings>(`/profiles/${encodeURIComponent(name)}`, { method: "DELETE" }),
   onboarding: (categories: string[], priority: string, spend: string) => call<Settings>("/onboarding", json("POST", { categories, priority, spend })),
-  event: (kind: "open" | "compare_store", product: string, title: string) => call<{ recorded: boolean }>("/events", json("POST", { kind, product, title })).catch(() => {}),
+  /** "buy" and "check" are the card's Buy this / Check this out buttons; the link and price let Barney tell you if it gets cheaper. */
+  event: (kind: "open" | "compare_store" | "buy" | "check", product: string, title: string, link?: string | null, price?: number | null) =>
+    call<{ recorded: boolean }>("/events", json("POST", { kind, product, title, link: link ?? null, price: price ?? null })).catch(() => {}),
+  feed: () => call<FeedItem[]>("/feed"),
+  feedSeen: () => call<{ ok: boolean }>("/feed/seen", { method: "POST" }),
+  setCountry: (country: string) => call<Settings>("/settings", json("PUT", { country })),
   feedback: (title: string, product: string, verdict: "up" | "down" | "wrong", thread_id = "") => call<{ ok: boolean }>("/feedback", json("POST", { title, product, verdict, thread_id })),
   track: (name: string) => call<{ ok: boolean }>("/track", json("POST", { name })).catch(() => {}),
   reviewSummary: (token: string) => call<ReviewSummary>("/reviews/summary", json("POST", { token })),

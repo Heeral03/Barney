@@ -7,10 +7,14 @@ proposal (`plan`) and applies the rules that keep the conversation natural and f
     says "just show me" (`skip`);
   - never more than MAX_QUESTIONS in total, and never the same question topic twice;
   - never search before a product is known;
+  - a returning shopper (Barney already remembers enough about what they like for this kind of product) is not asked
+    anything: Barney searches with what he knows and says what he assumed, so they can correct it;
+  - a shopper in a country Barney cannot serve yet is told so instead of being shown stores that would not deliver;
   - "other options" reuses what was already found (the `more` node), and only searches again when that runs out.
 """
 import re
 
+from app import region
 from app.agents.common import answered_topics, last_user_text, next_attribute, reply, topic_key
 from app.freshness import with_current_year
 from app.commands import (
@@ -82,7 +86,26 @@ def _first_sentence(text: str) -> str:
     return re.split(r"(?<=[.!])\s", text.strip(), maxsplit=1)[0]
 
 
+def _remembers_enough(profile: dict) -> bool:
+    """True when memory already answered what matters for this product: two or more of its questions, or every lasting one."""
+    used = profile.get("from_memory") or {}
+    if not used:
+        return False
+    done = answered_topics(profile)
+    open_lasting = [a for a in profile.get("attrs") or [] if a.get("durable") and topic_key(a["topic"]) not in done]
+    return len(used) >= 2 or not open_lasting
+
+
 def supervisor_node(state: chatState) -> chatState:
+    """Decide the route, then make sure a search only happens where Barney can serve the shopper."""
+    decided = _decide(state)
+    country = state.get("country") or region.DEFAULT
+    if decided.get("route") == "research" and not region.supported(country):
+        return reply(region.not_served_text(country), route="end", options=[], cards=[])
+    return decided
+
+
+def _decide(state: chatState) -> chatState:
     said = last_user_text(state["messages"])
     handled = _command(said, state)
     if handled is not None:
@@ -110,6 +133,11 @@ def supervisor_node(state: chatState) -> chatState:
 
     # Understand first: with no results yet, walk through the product's question plan before searching.
     attribute = next_attribute(profile)
+    if intent in ("ask", "search") and profile.get("product") and not offers and not profile.get("skip") and attribute \
+            and _remembers_enough(profile):
+        profile["skip"] = profile["assumed"] = True  # a returning shopper: no questionnaire, search with what is remembered
+        intent = "search"
+        attribute = None
     if intent in ("ask", "search") and profile.get("product") and not offers and not profile.get("skip") \
             and attribute and len(asked) < MAX_QUESTIONS_BEFORE_RESULTS:
         return _questionnaire(profile, message)

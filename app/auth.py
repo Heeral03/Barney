@@ -20,6 +20,7 @@ class Caller:
     id: str
     email: str = ""
     profile: str = ""  # which shopping profile ("Mom", ...) the page has selected; checked against the account before use
+    country: str = ""  # the country the web app detected from the visitor's connection; the shopper's own choice overrides it
 
     @property
     def guest(self) -> bool:
@@ -45,12 +46,13 @@ def decode(token: str) -> Caller:
     return Caller(sub, str(claims.get("email") or ""))
 
 
-def current_user(authorization: str = Header(default=""), x_barney_profile: str = Header(default="")) -> Caller:
+def current_user(authorization: str = Header(default=""), x_barney_profile: str = Header(default=""),
+                 x_barney_country: str = Header(default="")) -> Caller:
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(401, "missing bearer token")
     caller = decode(token)
-    return Caller(caller.id, caller.email, x_barney_profile[:60])
+    return Caller(caller.id, caller.email, x_barney_profile[:60], x_barney_country[:2].upper())
 
 
 def signed_in(me: Caller = Depends(current_user)) -> Caller:

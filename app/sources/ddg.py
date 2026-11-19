@@ -7,6 +7,7 @@ import logging
 import re
 from urllib.parse import urlparse
 
+from app import stores
 from app.sources.serpkite import _tokens
 
 log = logging.getLogger(__name__)
@@ -14,6 +15,7 @@ log = logging.getLogger(__name__)
 PRICE = re.compile(r"(?:₹|\bRs\.?|\bINR)\s?([\d,]{2,9}(?:\.\d+)?)", re.I)
 SHOPS = ("amazon.in", "flipkart.com", "myntra.com", "ajio.com", "nykaa.com", "croma.com", "reliancedigital.in",
          "tatacliq.com", "meesho.com", "snapdeal.com", "vijaysales.com", "shopify", "bewakoof.com")
+_REGION = {"IN": "in-en", "US": "us-en", "GB": "uk-en", "CA": "ca-en", "AU": "au-en", "AE": "xa-en"}
 JUNK = ("wikipedia", "youtube", "reddit", "quora", "facebook", "instagram", "pinterest", "buyhatke", "twitter",
         "linkedin", "medium.com", "blogspot")
 
@@ -24,16 +26,16 @@ def _price(text: str):
     return min(nums) if nums else None
 
 
-def _images(query: str) -> list[dict]:
+def _images(query: str, country: str = "IN") -> list[dict]:
     try:
         from ddgs import DDGS
-        return DDGS().images(query, region="in-en", max_results=12) or []
+        return DDGS().images(query, region=_REGION.get(country, "wt-wt"), max_results=12) or []
     except Exception as e:
         log.warning("ddg images failed: %s", e)
         return []
 
 
-def ddg_offers(query: str, limit: int = 6) -> list[dict]:
+def ddg_offers(query: str, country: str = "IN", limit: int = 6) -> list[dict]:
     from app.tools.products import inr
 
     try:
@@ -45,22 +47,22 @@ def ddg_offers(query: str, limit: int = 6) -> list[dict]:
     hits, seen = [], set()
     for q in (f"{query} price ₹", f"{query} buy online"):
         try:
-            rows = DDGS().text(q, region="in-en", max_results=10) or []
+            rows = DDGS().text(q, region=_REGION.get(country, "wt-wt"), max_results=10) or []
         except Exception as e:
             log.warning("ddg text %r failed: %s", q, e)
             continue
         for r in rows:
             url, title = r.get("href") or "", r.get("title") or ""
             host = urlparse(url).netloc.lower().removeprefix("www.")
-            if not url or not title or url in seen or any(j in host for j in JUNK):
+            if not url or not title or url in seen or any(j in host for j in JUNK) or not stores.usable(url, country):
                 continue
             seen.add(url)
             hits.append({"title": title, "url": url, "host": host, "price": _price(f"{title} {r.get('body')}")})
 
-    # Priced results first, then known Indian retailers.
-    hits.sort(key=lambda h: (h["price"] is None, not any(s in h["host"] for s in SHOPS)))
+    # Priced results first. Only registered stores that deliver to the shopper reached this point.
+    hits.sort(key=lambda h: h["price"] is None)
     hits = hits[:limit]
-    pics = _images(query)
+    pics = _images(query, country)
 
     offers = []
     for i, h in enumerate(hits, 1):

@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app import stores
+
 log = logging.getLogger(__name__)
 
 URL = "https://api.tavily.com/search"
@@ -50,7 +52,7 @@ def read_price(text: str):
     return min(nums) if nums else None
 
 
-def tavily_offers(query: str, limit: int = 6) -> list[dict]:
+def tavily_offers(query: str, country: str = "IN", limit: int = 6) -> list[dict]:
     from app.tools.products import inr
 
     key = os.getenv("TAVILY_API_KEY")
@@ -59,7 +61,7 @@ def tavily_offers(query: str, limit: int = 6) -> list[dict]:
     try:
         r = httpx.post(
             URL, headers={"Authorization": f"Bearer {key}"}, timeout=20,
-            json={"query": f"{query} price", "search_depth": "basic", "max_results": 10, "include_domains": RETAILERS},
+            json={"query": f"{query} price", "search_depth": "basic", "max_results": 10, "include_domains": stores.domains_for(country)[:300] or RETAILERS},
         )
         r.raise_for_status()
         rows = r.json().get("results") or []
@@ -71,7 +73,7 @@ def tavily_offers(query: str, limit: int = 6) -> list[dict]:
     for rank, row in enumerate(rows):
         url, title = row.get("url") or "", (row.get("title") or "").strip()
         host = urlparse(url).netloc.lower().removeprefix("www.")
-        foreign = bool(re.match(r"^[a-z]{2}\.", host)) and not host.startswith("in.")  # ph.puma.com, uk.shop...
+        foreign = not stores.usable(url, country)  # not a registered store, or one that does not deliver here
         listing_page = foreign or not is_product_page(url, title) or "/collections/" in url or _CATEGORY_TITLE.search(title)
         if not url or not title or url in seen or listing_page:  # skip search-result, category and non-Indian pages
             continue

@@ -35,6 +35,7 @@ CATALOG = {
 @pytest.fixture
 def stubs(monkeypatch):
     monkeypatch.setenv("CONFIRM_CLOSE_CALLS", "0")  # the pause has its own tests below
+    monkeypatch.setattr(presenter, "ALSO_SHOW", 0)  # most tests are about the single pick; the short list has its own test
     calls = {"shopping": [], "threads": set(), "decider_saw": [], "compare": 0, "media": []}
     plans = []
 
@@ -42,16 +43,16 @@ def stubs(monkeypatch):
         calls["decider_saw"].append(messages[1].content)  # the "what is known" block
         return requirements.Plan(**plans.pop(0))
 
-    def shopping(query):
+    def shopping(query, country="IN"):
         calls["shopping"].append(query)
         calls["threads"].add(threading.get_ident())
         time.sleep(0.5)  # a real search takes a while; parallel workers overlap this
         return [{"title": t, "price_inr": p, "price_display": f"₹{p}", "seller": "Shop", "rating": r,
                  "rating_count": c, "api": "google_shopping", "rank": i} for i, (t, p, r, c) in enumerate(CATALOG.get(query, []))]
 
-    def media(items):
+    def media(items, country="IN"):
         calls["media"].append([title for title, _ in items])
-        return [{"link": f"https://shop/{i}", "image_url": "img"} for i, _ in enumerate(items)]
+        return [{"link": f"https://www.amazon.in/p/{i}", "image_url": "img"} for i, _ in enumerate(items)]
 
     def compare(messages):
         calls["compare"] += 1
@@ -59,8 +60,8 @@ def stubs(monkeypatch):
 
     monkeypatch.setattr(requirements.decider, "invoke", decider)
     monkeypatch.setattr(researcher, "shopping_offers", shopping)
-    monkeypatch.setattr(researcher, "web_offers", lambda q: [])
-    monkeypatch.setattr(researcher, "tavily_search", lambda q: [])
+    monkeypatch.setattr(researcher, "web_offers", lambda q, c="IN": [])
+    monkeypatch.setattr(researcher, "tavily_search", lambda q, c="IN": [])
     monkeypatch.setattr(presenter, "find_media_many", media)
     monkeypatch.setattr(presenter.recommender, "invoke", lambda m: presenter.Recommendation(
         best_number=1, intro="Found a solid women's stability runner 👟", reasons=["fits your budget", "well reviewed"],
@@ -158,8 +159,8 @@ def test_a_refinement_searches_again_with_the_change(stubs, thread_id, user_id):
 def test_fallback_wave_runs_when_first_wave_is_thin(stubs, thread_id, user_id, monkeypatch):
     calls, plans = stubs
     web_calls, tavily_calls = [], []
-    monkeypatch.setattr(researcher, "web_offers", lambda q: web_calls.append(q) or [])
-    monkeypatch.setattr(researcher, "tavily_search", lambda q: tavily_calls.append(q) or [{
+    monkeypatch.setattr(researcher, "web_offers", lambda q, c="IN": web_calls.append(q) or [])
+    monkeypatch.setattr(researcher, "tavily_search", lambda q, c="IN": tavily_calls.append(q) or [{
         "title": "Tavily Find", "price_inr": 1000, "price_display": "₹1,000", "seller": "amazon.in", "rating": None,
         "rating_count": None, "api": "tavily", "link": "https://amazon.in/x", "rank": 0}])
     monkeypatch.setitem(CATALOG, f"obscure {date.today().year}", [shoe("Only One", 1000, 4.0, 10)])
@@ -227,20 +228,35 @@ def test_it_asks_one_questionnaire_then_searches_with_every_answer(stubs, thread
     assert not any("Office" in t or "1,000" in t for t in texts)
 
 
-def test_it_uses_what_it_remembers_and_only_asks_the_rest(stubs, thread_id, user_id, monkeypatch):
+def test_a_returning_shopper_is_not_quizzed(stubs, thread_id, user_id, monkeypatch):
+    """Two lasting answers are remembered: Barney searches at once, uses them, and says what he assumed."""
     calls, plans = stubs
     ltm_store.remember(ltm_store.ltm, user_id, "Fit preference for jeans: Straight", "jeans", key="pref:jeans:fit")
     ltm_store.remember(ltm_store.ltm, user_id, "Colour preference for jeans: Dark blue", "jeans", key="pref:jeans:color")
+    monkeypatch.setitem(CATALOG, "jeans", JEANS)
     plans.append({"decision": "ask", "product": "jeans", "attributes": [FIT, COLOUR, OCCASION, BUDGET]})
     out, _ = chat(thread_id, user_id, "I want jeans")
-    assert [q["topic"] for q in out["form"]["questions"]] == ["occasion", "budget"]  # fit and colour are already known
-    assert "I'm using it" in out["messages"][-1].content and "**Fit:** Straight" in out["messages"][-1].content
+    assert not out.get("form") and calls["shopping"] == ["jeans"] and out["cards"]
     assert out["profile"]["facts"]["fit"] == "Straight" and out["profile"]["facts"]["colour"] == "Dark blue"
+    assert "I didn't ask you the usual questions" in out["messages"][-1].content
 
-    plans.append({"decision": "search", "queries": ["women straight jeans"]})
-    monkeypatch.setitem(CATALOG, "women straight jeans", JEANS)
-    chat(thread_id, user_id, "Occasion: Office", {"occasion": ["Office"], "budget": ["Under ₹1,000"]})
-    assert "fit: answered (Straight)" in calls["decider_saw"][-1]  # the search is written knowing their taste
+
+def test_one_remembered_answer_is_not_enough_to_skip_the_questionnaire(stubs, thread_id, user_id):
+    calls, plans = stubs
+    ltm_store.remember(ltm_store.ltm, user_id, "Fit preference for jeans: Straight", "jeans", key="pref:jeans:fit")
+    plans.append({"decision": "ask", "product": "jeans", "attributes": [FIT, COLOUR, OCCASION, BUDGET]})
+    out, _ = chat(thread_id, user_id, "I want jeans")
+    assert [q["topic"] for q in out["form"]["questions"]] == ["colour", "occasion", "budget"]  # fit is known, the rest is asked
+    assert "I'm using it" in out["messages"][-1].content and calls["shopping"] == []
+
+
+def test_a_country_barney_cannot_serve_gets_an_honest_answer_not_stores(stubs, thread_id, user_id):
+    calls, plans = stubs
+    plans.append({"decision": "search", "product": "laptop", "queries": ["laptop"]})
+    cfg = {"configurable": {"thread_id": thread_id, "user_id": user_id}, "recursion_limit": 25}
+    out = chatbot.invoke({"messages": [HumanMessage(content="a laptop")], "answers": {}, "form": None, "country": "BR"}, config=cfg)
+    assert calls["shopping"] == [] and not out["cards"]
+    assert "can't find stores I trust that deliver to BR" in out["messages"][-1].content
 
 
 def test_just_show_me_skips_the_questionnaire(stubs, thread_id, user_id, monkeypatch):
@@ -270,7 +286,7 @@ def test_the_pick_is_shown_at_the_cheapest_reliable_store_with_that_stores_link(
              "rating_count": 99, "image_url": "https://img/nifty", "link": None,
              "token": "tok-nifty", "api": "serpapi", "rank": 2}]
     monkeypatch.setattr(serpapi, "available", lambda: True)
-    monkeypatch.setattr(serpapi, "search_shopping", lambda q: searched.append(q) or [dict(r) for r in rows])
+    monkeypatch.setattr(serpapi, "search_shopping", lambda q, c="IN": searched.append(q) or [dict(r) for r in rows])
     stores = [{"name": "Myntra", "price_inr": 600, "price_display": "₹600", "link": "https://myntra.com/kotty"},
               {"name": "AJIO.com", "price_inr": 375, "price_display": "₹375", "link": "https://ajio.com/kotty"},
               {"name": "Flipkart", "price_inr": 558, "price_display": "₹558", "link": "https://flipkart.com/kotty"},
@@ -291,10 +307,10 @@ def test_the_pick_is_shown_at_the_cheapest_reliable_store_with_that_stores_link(
     assert "Kotty Women Straight Fit High-Rise Jeans** at **₹375**" in reply and "from AJIO.com" in reply  # not Myntra's ₹600
     assert "Prices differ across stores" in reply
     assert "Cheapest reliable store I found: **AJIO.com at ₹375** (as listed; I couldn't open the page to check it)" in reply
-    assert "Listed even lower at Bestdeals4u (₹300)" in reply and "a store I can't vouch for" in reply
+    assert "Bestdeals4u" not in reply, "a store that is not on the genuine list is never mentioned, let alone cheaper"
     assert "Flipkart ₹558 ✓" in reply and "Myntra ₹600 ✓" in reply
     assert (card["price_display"], card["seller"], card["link"]) == ("₹375", "AJIO.com", "https://ajio.com/kotty")
-    assert [s["name"] for s in card["stores"]] == ["Bestdeals4u", "AJIO.com", "Flipkart", "Myntra"] and card["token"] == "tok-kotty"
+    assert [s["name"] for s in card["stores"]] == ["AJIO.com", "Flipkart", "Myntra"] and card["token"] == "tok-kotty"
     assert calls["media"] == [], "SerpAPI listings come with pictures: no image lookups"
     # listings not shown yet keep their listed price and have no link at all (certainly not a Google one)
     other = next(o for o in out["offers"] if o["title"].startswith("Levi's"))
@@ -312,7 +328,7 @@ def test_everything_stays_inside_barney_pick_other_options_and_side_by_side(stub
              "rating_count": 500 - 100 * i, "image_url": f"https://img/{i}", "link": None, "token": f"tok{i}", "api": "serpapi", "rank": i}
             for i, t in enumerate(names)]
     monkeypatch.setattr(serpapi, "available", lambda: True)
-    monkeypatch.setattr(serpapi, "search_shopping", lambda q: [dict(r) for r in rows])
+    monkeypatch.setattr(serpapi, "search_shopping", lambda q, c="IN": [dict(r) for r in rows])
     lookups = []
 
     def stores(token):
@@ -460,3 +476,16 @@ def test_typing_something_else_while_paused_starts_a_new_turn(close_call, stubs,
     plans.append({"decision": "chat", "message": "Sure, what else can I help with?"})
     other = client.post("/chat", json={"message": "actually, never mind. thanks!", "thread_id": thread_id}).json()
     assert other["reply"] and "confirm" not in other
+
+
+def test_the_pick_comes_with_a_short_list_to_compare(stubs, thread_id, user_id, monkeypatch):
+    calls, plans = stubs
+    monkeypatch.setattr(presenter, "ALSO_SHOW", 2)
+    plans.append({"decision": "search", "product": "running_shoes", "facts": [{"topic": "gender", "value": "women"}],
+                  "queries": ["women running shoes"]})
+    out, _ = chat(thread_id, user_id, "women running shoes")
+    assert [c["number"] for c in out["cards"]] == [1, 2, 3] and [bool(c.get("best")) for c in out["cards"]] == [True, False, False]
+    assert out["shown"] == [1, 2, 3] and "put 2 more below" in out["messages"][-1].content
+    assert all(c["link"].startswith("https://www.amazon.in") for c in out["cards"])
+    again, _ = chat(thread_id, user_id, SHOW_ALTERNATIVES)
+    assert [c["number"] for c in again["cards"]] == [4]  # "other options" continues after what was shown (only 4 usable shoes exist)

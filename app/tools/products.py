@@ -2,6 +2,7 @@ import logging
 import re
 from typing import Optional
 
+from app import region
 from app.sources.cache import ttl_cache
 from app.sources.serpkite import note_failure, quota_exhausted, sk
 
@@ -84,11 +85,11 @@ def clean_queries(queries: list[str]) -> list[str]:
     return out[:3]
 
 
-def _shopping(query: str) -> list[dict]:
+def _shopping(query: str, country: str = "IN") -> list[dict]:
     if quota_exhausted():
         return []
     try:
-        res = sk.shopping(query, country="in", num=10)
+        res = sk.shopping(query, country=region.market(country).gl, num=10)
         res = res.model_dump() if hasattr(res, "model_dump") else res
     except Exception as e:
         log.warning("shopping search %r failed: %s", query, e)
@@ -98,13 +99,13 @@ def _shopping(query: str) -> list[dict]:
 
 
 @ttl_cache(900)
-def shopping_offers(query: str) -> list[dict]:
+def shopping_offers(query: str, country: str = "IN") -> list[dict]:
     """Google Shopping (via SerpKite) for ONE query, normalised, in relevance order (`rank` 0 is the best match).
 
     Budget filtering, de-duplication, ranking and link/image lookup all happen later, in the curator.
     """
     offers = []
-    for rank, item in enumerate(_shopping(query)):
+    for rank, item in enumerate(_shopping(query, country)):
         title, price = item.get("title"), item.get("price_value")
         if not title or not price:
             continue

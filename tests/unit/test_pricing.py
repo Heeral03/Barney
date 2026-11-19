@@ -108,11 +108,11 @@ def compare(monkeypatch, pages, stores=STORES):
 def test_picks_the_cheapest_reliable_store_and_confirms_its_price(monkeypatch):
     info = compare(monkeypatch, {"myntra.com": 600.0, "flipkart.com": 558.0, "ajio.com": None})  # AJIO refuses to be read
     names = [s["name"] for s in info["stores"]]
-    assert names == ["Bestdeals4u", "AJIO.com", "Flipkart", "Myntra"]
-    assert info["cheapest"]["name"] == "AJIO.com" or info["cheapest"]["name"] == "AJIO.com"
+    assert names == ["AJIO.com", "Flipkart", "Myntra"]  # Bestdeals4u is not a registered store, so it is not offered at all
+    assert info["cheapest"]["name"] == "AJIO.com" and info["blocked"] == 1
     by = {s["name"]: s for s in info["stores"]}
     assert by["Flipkart"]["verified"] is True and by["Myntra"]["verified"] is True and by["AJIO.com"]["verified"] is None
-    assert by["Bestdeals4u"]["trusted"] is False
+    assert all(s["trusted"] for s in info["stores"])
 
 
 def test_the_page_price_wins_when_it_differs_from_the_listing(monkeypatch):
@@ -123,12 +123,37 @@ def test_the_page_price_wins_when_it_differs_from_the_listing(monkeypatch):
     assert info["cheapest"]["name"] == "AJIO.com" and info["cheapest"]["verified"] is True
 
 
-def test_a_store_we_cannot_vouch_for_is_never_the_one_to_buy_from(monkeypatch):
+def test_a_store_we_cannot_vouch_for_is_never_shown(monkeypatch):
     stores = [STORES[3], STORES[1]]  # unknown shop at 300, AJIO at 375
     info = compare(monkeypatch, {"ajio.com": 375.0}, stores=stores)
-    assert info["cheapest"]["name"] == "AJIO.com"
+    assert info["cheapest"]["name"] == "AJIO.com" and [s["name"] for s in info["stores"]] == ["AJIO.com"]
     only_unknown = compare(monkeypatch, {}, stores=[STORES[3]])
-    assert only_unknown["cheapest"] is None and len(only_unknown["stores"]) == 1
+    assert only_unknown["cheapest"] is None and only_unknown["stores"] == [] and only_unknown["blocked"] == 1
+
+
+def test_a_look_alike_domain_or_plain_http_is_not_genuine(monkeypatch):
+    spoofs = [{"name": "Amazon.in", "price_inr": 100, "price_display": "₹100", "link": "https://amazon.in.deals-now.xyz/p"},
+              {"name": "Flipkart", "price_inr": 100, "price_display": "₹100", "link": "https://flipkart.com.evil.example/p"},
+              {"name": "Myntra", "price_inr": 100, "price_display": "₹100", "link": "https://myntra.com.cheap.example/p"}]
+    info = compare(monkeypatch, {}, stores=spoofs)
+    assert info["stores"] == [] and info["blocked"] == 3
+
+
+def test_only_stores_that_deliver_to_the_shoppers_country_are_kept(monkeypatch):
+    monkeypatch.setattr(serpapi, "available", lambda: True)
+    monkeypatch.setattr(serpapi, "stores", lambda token: [dict(s) for s in STORES[:3]])  # Myntra, AJIO, Flipkart: India only
+    monkeypatch.setattr(pricing, "page_price", lambda url, timeout=0: None)
+    assert [s["name"] for s in pricing.compare("tok", "IN")["stores"]] == ["AJIO.com", "Flipkart", "Myntra"]
+    us = pricing.compare("tok", "US")
+    assert us["stores"] == [] and us["blocked"] == 3
+
+
+def test_the_cheapest_store_is_the_one_with_the_lowest_price_to_the_door(monkeypatch):
+    stores = [{"name": "AJIO.com", "price_inr": 375, "price_display": "₹375", "link": "https://ajio.com/p", "shipping": "₹150"},
+              {"name": "Flipkart", "price_inr": 420, "price_display": "₹420", "link": "https://flipkart.com/p", "shipping": "Free"}]
+    info = compare(monkeypatch, {}, stores=stores)
+    assert [s["name"] for s in info["stores"]] == ["Flipkart", "AJIO.com"]  # ₹420 delivered beats ₹375 + ₹150
+    assert info["stores"][1]["landed_inr"] == 525
 
 
 def test_a_failed_store_lookup_is_harmless(monkeypatch):
@@ -145,10 +170,10 @@ def test_the_offer_is_shown_at_the_cheapest_reliable_stores_price_and_link(monke
     assert (shown["price_display"], shown["seller"], shown["link"]) == ("₹375", "AJIO.com", "https://ajio.com/p")
     assert shown["price_verified"] is True and shown["seller_trusted"] is True and shown["token"] == "tok" and len(shown["stores"]) == 3
     assert pricing.apply_to_offer(offer, {"stores": [], "cheapest": None}) == offer  # nothing found: unchanged
-    # only a store we cannot vouch for sells it: still the seller's own page (never Google), flagged as unreliable
+    # only a store we cannot vouch for sells it: the listing is flagged unsafe and never recommended
     lone = compare(monkeypatch, {}, stores=[STORES[3]])
     flagged = pricing.apply_to_offer(offer, lone)
-    assert flagged["link"] == "https://bestdeals4u.in/p" and flagged["seller_trusted"] is False and flagged["price_verified"] is False
+    assert flagged["unsafe"] is True and flagged["link"] is None
 
 
 def test_the_explanation_is_honest_about_what_was_checked(monkeypatch):
@@ -156,7 +181,7 @@ def test_the_explanation_is_honest_about_what_was_checked(monkeypatch):
     text = pricing.comparison_text(info["stores"])
     assert "Prices differ across stores" in text
     assert "AJIO.com at ₹375** (as listed; I couldn't open the page to check it)" in text  # reliable, cheapest, unconfirmed
-    assert "Listed even lower at Bestdeals4u (₹300)" in text and "a store I can't vouch for" in text
+    assert "Bestdeals4u" not in text
     assert "Flipkart ₹558 ✓" in text and "Myntra ₹600 ✓" in text
     confirmed = pricing.comparison_text(compare(monkeypatch, {"flipkart.com": 558.0}, stores=STORES[2:3] + STORES[0:1])["stores"])
     assert "Flipkart at ₹558** (checked on the store's own page)" in confirmed
@@ -182,7 +207,7 @@ def test_serpapi_leads_and_the_others_back_it_up(monkeypatch):
 
 
 def test_worker_runs_serpapi(monkeypatch):
-    monkeypatch.setattr(researcher.serpapi, "search_shopping", lambda q: [{"title": q}])
+    monkeypatch.setattr(researcher.serpapi, "search_shopping", lambda q, c="IN": [{"title": q}])
     assert researcher.worker({"source": "serpapi", "query": "x"}) == {"raw_offers": [{"title": "x"}]}
 
 

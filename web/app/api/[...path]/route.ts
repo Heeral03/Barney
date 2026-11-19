@@ -36,6 +36,9 @@ async function handle(req: Request, ctx: RouteContext<"/api/[...path]">): Promis
   const headers = new Headers({ Authorization: `Bearer ${await backendToken(sub, accountId ? session?.user?.email : null)}` });
   const type = req.headers.get("content-type");
   if (type) headers.set("content-type", type);
+  // Where the visitor is, from the host's edge headers (Vercel, Cloudflare), else the region in their browser language.
+  const country = req.headers.get("x-vercel-ip-country") ?? req.headers.get("cf-ipcountry") ?? req.headers.get("accept-language")?.match(/-([A-Za-z]{2})\b/)?.[1];
+  if (country && /^[A-Za-z]{2}$/.test(country)) headers.set("x-barney-country", country.toUpperCase());
   const profileHeader = req.headers.get("x-barney-profile");
   if (profileHeader) headers.set("x-barney-profile", profileHeader.slice(0, 60));
   if (body === undefined && req.method !== "GET" && req.method !== "HEAD") body = await req.arrayBuffer();

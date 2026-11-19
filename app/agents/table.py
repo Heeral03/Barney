@@ -65,7 +65,10 @@ def compare_node(state: chatState) -> chatState:
     if len(options) < 2:
         return reply("I need at least two options to put side by side.", route="end", profile=profile)
 
-    options = prepare_all(options)  # pictures, plus every store's price and a link to each seller
+    options = [o for o in prepare_all(options, state.get("country") or "IN") if not o.get("unsafe")]  # pictures, every store's price and link; only genuine stores
+    if len(options) < 2:
+        return reply("Fewer than two of these are sold by stores I can verify deliver to you, so there's nothing fair to put side by side. "
+                     "Want me to find more options?", [SHOW_ALTERNATIVES, CHANGE], route="end", profile=profile)
     pick = profile.get("pick")
     labels = [label for label, _ in requirement_labels(profile, state.get("recalled"))]
     money = budget_label(profile)

@@ -138,3 +138,39 @@ def test_junk_listings_are_dropped_but_a_thin_result_is_kept():
     kept = [x["title"] for x in _trustworthy(offers)]
     assert kept == ["EarPods", "EarPods USB-C", "Sony Type-C", "Sennheiser CX"]  # cheap fakes and an unrated unknown seller are out
     assert len(_trustworthy(offers[:2] + offers[6:])) == 3  # too little would be left after filtering: keep all
+
+
+# ----------------------------------------------------------------- who it is for, and a thin budget window
+def _raw(*rows):
+    return [{"title": t, "price_inr": p, "price_display": f"₹{p}", "seller": "Myntra", "rating": 4.2, "rating_count": 80, "rank": i}
+            for i, (t, p) in enumerate(rows)]
+
+
+def test_a_title_that_names_nobody_is_left_out_when_enough_name_the_shopper():
+    raw = _raw(("Charcoalcast Crewneck Sweatshirt", 1799), ("Roadster Women Navy Sweatshirt", 1500), ("Levis Women Black Sweatshirt", 1900),
+               ("Puma Women Grey Sweatshirt", 1700), ("Levi's Men Hooded Sweatshirt", 1600))
+    out = curator.curator_node({"raw_offers": raw, "country": "IN", "search": {"queries": ["women sweatshirt"]},
+                                "profile": {"product": "sweatshirt", "facts": {"gender": "women"}}})
+    titles = [o["title"] for o in out["offers"]]
+    assert "Charcoalcast Crewneck Sweatshirt" not in titles and not any("Men" in t for t in titles) and len(titles) == 3
+
+
+def test_an_unlabelled_title_stays_when_too_few_name_the_shopper():
+    raw = _raw(("Crewneck Sweatshirt A", 1500), ("Crewneck Sweatshirt B", 1600), ("Roadster Women Navy Sweatshirt", 1700), ("Men Hoodie", 1400))
+    out = curator.curator_node({"raw_offers": raw, "country": "IN", "search": {"queries": ["women sweatshirt"]},
+                                "profile": {"product": "sweatshirt", "facts": {"gender": "women"}}})
+    assert len(out["offers"]) == 3 and not any("Men" in o["title"] for o in out["offers"])
+
+
+def test_a_thin_budget_window_is_widened_honestly_not_left_at_one_item():
+    raw = _raw(("Levis Women Black Sweatshirt", 2685), ("Roadster Women Sweatshirt", 1500), ("Puma Women Sweatshirt", 1700),
+               ("US Polo Women Sweatshirt", 1900), ("Monte Carlo Women Sweatshirt", 3500))
+    out = curator.curator_node({"raw_offers": raw, "country": "IN", "search": {"queries": ["women sweatshirt"]},
+                                "profile": {"product": "sweatshirt", "facts": {"gender": "women"}, "budget_min": 2000, "budget_max": 3000}})
+    offers = out["offers"]
+    assert offers[0]["price_inr"] == 2685 and not offers[0].get("below_budget_min")  # the one inside the range comes first
+    assert sorted(o["price_inr"] for o in offers[1:]) == [1500, 1700, 1900] and all(o["below_budget_min"] for o in offers[1:])
+    assert all(o["price_inr"] <= 3000 for o in offers)  # the ceiling is never crossed
+    from app.notes import notes_for
+    assert any("Below the ₹2,000" in n["text"] for n in notes_for(offers[1], {"budget_min": 2000, "budget_max": 3000}))
+    assert not any("Within your budget" in n["text"] for n in notes_for(offers[1], {"budget_min": 2000, "budget_max": 3000}))

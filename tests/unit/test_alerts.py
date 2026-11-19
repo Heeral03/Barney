@@ -10,7 +10,7 @@ import app.wishlist as wl
 from app.db import pool
 from tests.conftest import client_for
 
-OFFER = {"title": "Sony IER-EX15C", "price_display": "₹1,590", "price_inr": 1590, "seller": "Reliance Digital", "link": "https://reliance.example/p"}
+OFFER = {"title": "Sony IER-EX15C", "price_display": "₹1,590", "price_inr": 1590, "seller": "Reliance Digital", "link": "https://www.reliancedigital.in/p"}
 
 
 @pytest.fixture

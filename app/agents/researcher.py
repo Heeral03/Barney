@@ -35,7 +35,7 @@ SOURCE_TIMEOUT = 12  # seconds; a slow source is skipped rather than stalling th
 
 _pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="search")
 
-web_offers = ttl_cache(900)(ddg_offers)
+web_offers = ttl_cache(900)(ddg_offers)  # (query, country)
 tavily_search = ttl_cache(900)(tavily_offers)
 
 
@@ -67,7 +67,8 @@ def plan_research(state: chatState) -> chatState:
     tasks = shopping_tasks(queries)
     if search.get("mode") == "more" and queries and not any(t["source"] in ("tavily", "web") for t in tasks):
         tasks += [{"source": "tavily", "query": queries[0]}, {"source": "web", "query": queries[0]}]
-    return {"raw_offers": RESET, "wave": 1, "next_tasks": tasks, "search_meta": {}}
+    country = state.get("country") or "IN"
+    return {"raw_offers": RESET, "wave": 1, "next_tasks": [{**t, "country": country} for t in tasks], "search_meta": {}}
 
 
 def fan_out(state: chatState):
@@ -77,13 +78,14 @@ def fan_out(state: chatState):
 
 
 def _run(task: dict) -> list[dict]:
+    country = task.get("country") or "IN"
     if task["source"] == "serpapi":
-        return serpapi.search_shopping(task["query"])
+        return serpapi.search_shopping(task["query"], country)
     if task["source"] == "shopping":
-        return shopping_offers(task["query"])
+        return shopping_offers(task["query"], country)
     if task["source"] == "tavily":
-        return tavily_search(task["query"])
-    items = [o for o in web_offers(task["query"]) if is_product_page(o.get("link"), o.get("title"))][:MAX_WEB_ITEMS]
+        return tavily_search(task["query"], country)
+    items = [o for o in web_offers(task["query"], country) if is_product_page(o.get("link"), o.get("title"))][:MAX_WEB_ITEMS]
     return [{"price_source": "page_text", **o, "title": clean_title(o["title"]), "api": "duckduckgo"} for o in items]
 
 
@@ -116,4 +118,5 @@ def gather(state: chatState) -> chatState:
     tasks += [{"source": "tavily", "query": q} for q in specific[:2]]
     if specific:
         tasks.append({"source": "web", "query": specific[0]})
-    return {"wave": 2, "next_tasks": tasks}
+    country = state.get("country") or "IN"
+    return {"wave": 2, "next_tasks": [{**t, "country": country} for t in tasks]}

@@ -61,6 +61,8 @@ def notes_for(offer: dict, profile: dict) -> list[dict]:
     hi, price = profile.get("budget_max"), offer.get("price_inr")
     if offer.get("over_budget"):
         warn.append("Over your budget")
+    elif offer.get("below_budget_min"):
+        warn.append(f"Below the ₹{int(profile['budget_min']):,}+ you asked for")
     elif hi and price and price <= hi:
         good.append("Within your budget")
     if "lowest price" in (offer.get("tags") or []):

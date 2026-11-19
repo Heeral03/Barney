@@ -6,6 +6,7 @@ from app.agents.curator import curator_node
 from app.agents.memory import memory_in, memory_out
 from app.agents.presenter import more_node, present_node, route_after_curator, route_after_more
 from app.agents.requirements import requirements_node
+from app.agents.specfit import spec_check_node
 from app.agents.researcher import fan_out, gather, plan_research, worker
 from app.agents.supervisor import route_after_supervisor, supervisor_node
 from app.agents.table import compare_node
@@ -22,7 +23,7 @@ checkpointer.setup()  # creates the checkpoint tables on first run; a no-op afte
 #                                                               |        ^                                      |
 #                                                               |        +---- fallback sources, once ----------+
 #                                                               |                                               v
-#                                                               |                                            curator -+-> confirm_pick -> present -> END
+#                                                               |                                            curator -> spec_check -+-> confirm_pick -> present -> END
 #                                                               +-> more <-------------------------------------------+ (mode "more")
 #                                                                    |  ^ (nothing left: search again, appending)
 #                                                                    +--+-> END
@@ -35,6 +36,7 @@ graph.add_node("plan_research", plan_research)
 graph.add_node("worker", worker)
 graph.add_node("gather", gather)
 graph.add_node("curator", curator_node)
+graph.add_node("spec_check", spec_check_node)  # one model call: drops listings that clearly do not fit what was asked
 graph.add_node("confirm_pick", confirm_pick_node)  # human-in-the-loop: pauses on a genuine close call
 graph.add_node("present", present_node)
 graph.add_node("more", more_node)
@@ -51,7 +53,8 @@ graph.add_conditional_edges(
 graph.add_conditional_edges("plan_research", fan_out, ["worker", "curator"])
 graph.add_edge("worker", "gather")
 graph.add_conditional_edges("gather", fan_out, ["worker", "curator"])
-graph.add_conditional_edges("curator", route_after_curator, {"confirm_pick": "confirm_pick", "more": "more"})
+graph.add_edge("curator", "spec_check")
+graph.add_conditional_edges("spec_check", route_after_curator, {"confirm_pick": "confirm_pick", "more": "more"})
 graph.add_conditional_edges("more", route_after_more, {"plan_research": "plan_research", "__end__": END})
 graph.add_edge("confirm_pick", "present")
 graph.add_edge("present", END)

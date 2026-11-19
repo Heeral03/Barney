@@ -98,3 +98,11 @@ def fresh_price_cache():
     import app.pricing as pricing
 
     pricing._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def fit_check_passes_everything(monkeypatch):
+    """The model-based fit check never calls an LLM in tests; by default every listing fits."""
+    import app.agents.specfit as specfit
+
+    monkeypatch.setattr(specfit.checker, "invoke", lambda messages: specfit.Verdicts(verdicts=[]))

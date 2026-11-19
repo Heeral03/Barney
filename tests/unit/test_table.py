@@ -16,7 +16,7 @@ PROFILE = {"product": "jeans", "pick": 1, "budget_max": 2500, "facts": {"fit": "
 def stub(monkeypatch, result):
     seen = []
     monkeypatch.setattr(table.extractor, "invoke", lambda m: seen.append(m) or result)
-    monkeypatch.setattr(table, "prepare_all", lambda offers: [dict(o) for o in offers])
+    monkeypatch.setattr(table, "prepare_all", lambda offers, country="IN": [dict(o) for o in offers])
     return seen
 
 

@@ -6,7 +6,10 @@ The same product is often listed at very different prices (₹375 on one store, 
   3. re-read the price from the cheapest stores' own pages, so the price we show is the price on the website:
      matching prices are confirmed (✓), a different price on the page replaces the listed one, and a store that blocks
      automated checks is shown as "listed" and never as confirmed;
-  4. pick the cheapest RELIABLE store as the one to buy from. A cheaper store we cannot vouch for is mentioned, not chosen.
+  4. pick the store with the lowest LANDED price (price + delivery) as the one to buy from.
+
+Only genuine stores that deliver to the shopper's country are kept at all (see `app/stores.py`): a store whose link is not
+on a registered store's own domain, or that does not take orders from the shopper's country, is dropped, not shown with a warning.
 """
 import logging
 import re
@@ -15,6 +18,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
+from app import stores as registry
+from app.pricehistory import observe
 from app.sources import serpapi
 from app.sources.verify import page_price
 from app.tools.products import inr
@@ -39,7 +44,18 @@ _pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="verify")
 
 
 def is_trusted(name: str) -> bool:
-    return bool(_TRUSTED.search(name or ""))
+    """A seller NAME we recognise. Used only to rank unrated listings; what is genuine is decided by the link's domain."""
+    return bool(_TRUSTED.search(name or "")) or registry.find_by_name(name) is not None
+
+
+def _landed(store: dict) -> float:
+    """What getting it to the door costs: the listed total, else price + delivery when the delivery fee is written, else the price."""
+    if store.get("total_inr"):
+        return float(store["total_inr"])
+    fee = str(store.get("shipping") or "")
+    if fee and not re.search(r"free", fee, re.I) and (m := re.search(r"\d[\d,]*(?:\.\d+)?", fee)):
+        return store["price_inr"] + float(m.group(0).replace(",", ""))
+    return float(store["price_inr"])
 
 
 def _host(url: str) -> str:
@@ -51,14 +67,15 @@ _cache: dict[str, tuple[float, dict]] = {}
 _cache_lock = threading.Lock()
 
 
-def compare(token: str) -> dict:
+def compare(token: str, country: str = "IN") -> dict:
     """{"stores": [...], "cheapest": ..., "checked_at": epoch seconds}. Remembered for half an hour. Never raises."""
     now = time.time()
+    token = f"{token}|{country}"  # the same product has different stores in different countries
     with _cache_lock:
         hit = _cache.get(token)
         if hit and now - hit[0] < _CACHE_SECONDS:
             return hit[1]
-    info = _compare(token)
+    info = _compare(token.rsplit("|", 1)[0], country)
     if info.get("stores"):
         info = {**info, "checked_at": now}
         with _cache_lock:
@@ -68,8 +85,8 @@ def compare(token: str) -> dict:
     return info
 
 
-def _compare(token: str) -> dict:
-    """{"stores": [...cheapest first...], "cheapest": the store to buy from, or None}. Never raises."""
+def _compare(token: str, country: str = "IN") -> dict:
+    """{"stores": [...lowest landed price first...], "cheapest": the store to buy from, or None, "blocked": stores left out}. Never raises."""
     if not serpapi.available():
         return {"stores": [], "cheapest": None}
     try:
@@ -77,11 +94,10 @@ def _compare(token: str) -> dict:
     except Exception as e:
         log.warning("could not list stores: %s", e)
         return {"stores": [], "cheapest": None}
-    stores = sorted(({**r, "trusted": is_trusted(r["name"]), "verified": None} for r in rows), key=lambda r: r["price_inr"])
-    # Read the pages of the cheapest reliable stores, and of the cheapest store overall, all at once.
-    check = [s for s in stores if s["trusted"]][:CHECKED]
-    if stores and stores[0] not in check:
-        check.append(stores[0])
+    genuine = [{**r, "link": registry.secure(r["link"])} for r in rows if registry.usable(r["link"], country)]  # a registered store's own domain, and delivers here
+    blocked = len(rows) - len(genuine)
+    stores = sorted(({**r, "trusted": True, "verified": None} for r in genuine), key=_landed)
+    check = stores[:CHECKED]  # read the pages of the best few, all at once
     pages = list(_pool.map(lambda s: page_price(s["link"], PAGE_TIMEOUT), check))
     for store, page in zip(check, pages):
         if page is None:
@@ -91,28 +107,32 @@ def _compare(token: str) -> dict:
         else:  # the website shows a different price than the listing: the website is right
             store.update(listed_price_inr=store["price_inr"], price_inr=page, price_display=inr(page), verified="corrected",
                          total_inr=page if store.get("shipping") in (None, "", "Free") else None)  # the old total no longer holds
-    stores.sort(key=lambda r: r["price_inr"])
-    cheapest = next((s for s in stores if s["trusted"]), None)
-    return {"stores": stores, "cheapest": cheapest}
+    for s in stores:
+        s["landed_inr"] = _landed(s)
+    stores.sort(key=lambda r: r["landed_inr"])
+    return {"stores": stores, "cheapest": stores[0] if stores else None, "blocked": blocked}
 
 
 def apply_to_offer(offer: dict, info: dict) -> dict:
     """The offer, shown at the cheapest reliable store's price and link, with the full store list attached."""
     stores, cheapest = info.get("stores") or [], info.get("cheapest")
     if not stores:
-        return offer
-    slim = [{k: s.get(k) for k in ("name", "price_inr", "price_display", "link", "trusted", "verified", "tag", "shipping", "total_inr", "delivery", "offers")} for s in stores]
+        # Stores were found but none is genuine and delivers here: this listing must not be recommended.
+        return {**offer, "unsafe": True} if info.get("blocked") else offer
+    slim = [{k: s.get(k) for k in ("name", "price_inr", "price_display", "link", "trusted", "verified", "tag", "shipping", "total_inr", "landed_inr", "delivery", "offers")} for s in stores]
     update = {"stores": slim, "checked_at": info.get("checked_at")}
-    buy = cheapest or stores[0]  # no reliable store: still link the seller's own page, but flag it
+    buy = cheapest or stores[0]
     update.update(price_inr=buy["price_inr"], price_display=buy["price_display"] or inr(buy["price_inr"]),
-                  seller=buy["name"], link=buy["link"], link_domain=_host(buy["link"]),
-                  price_verified=buy["verified"] in (True, "corrected"), seller_trusted=bool(buy.get("trusted")))
+                  seller=buy["name"], link=buy["link"], link_domain=_host(buy["link"]), landed_inr=buy.get("landed_inr"),
+                  price_verified=buy["verified"] in (True, "corrected"), seller_trusted=True, unsafe=False)
+    if offer.get("title"):
+        update["deal"] = observe(offer["title"], buy["price_inr"], _host(buy["link"]))  # is today's price good, against its history
     return {**offer, **update}
 
 
 def comparison_text(stores: list[dict] | None) -> str:
     """A short explanation of the price spread, or "" when there is nothing to compare."""
-    stores = sorted(stores or [], key=lambda s: s["price_inr"])
+    stores = sorted(stores or [], key=lambda s: s.get("landed_inr") or s["price_inr"])
     if len(stores) < 2:
         return ""
     mark = lambda s: " ✓" if s.get("verified") in (True, "corrected") else ""

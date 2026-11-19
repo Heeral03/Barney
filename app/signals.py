@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 PROMPT = load_prompt("barney_signals.txt")
 extractor = Structured(Taste, '{"traits":[""]}')
 NEEDED = 3  # opens of one kind of product before it is worth looking for a pattern
-KINDS = ("open", "compare_store")
+KINDS = ("open", "compare_store", "buy", "check")  # "buy" and "check" are the card's Buy this / Check this out buttons
 
 with pool.connection() as conn:
     conn.execute("""
@@ -32,6 +32,8 @@ with pool.connection() as conn:
             processed boolean not null default false,
             at timestamptz not null default now()
         )""")
+    conn.execute("alter table events add column if not exists link text")
+    conn.execute("alter table events add column if not exists price numeric")
     conn.execute("""
         create table if not exists suggestions (
             id bigserial primary key,
@@ -54,12 +56,13 @@ with pool.connection() as conn:
         )""")
 
 
-def record_event(user_id: str, memory_id: str, kind: str, product: str, title: str) -> bool:
+def record_event(user_id: str, memory_id: str, kind: str, product: str, title: str,
+                 link: str | None = None, price: float | None = None) -> bool:
     if kind not in KINDS or not title.strip() or not settings.learning_on(user_id):
         return False
     with pool.connection() as conn:
-        conn.execute("insert into events (user_id, memory_id, kind, product, title) values (%s, %s, %s, %s, %s)",
-                     (user_id, memory_id, kind, product[:60], title[:200]))
+        conn.execute("insert into events (user_id, memory_id, kind, product, title, link, price) values (%s, %s, %s, %s, %s, %s, %s)",
+                     (user_id, memory_id, kind, product[:60], title[:200], (link or None) and link[:600], price))
     return True
 
 

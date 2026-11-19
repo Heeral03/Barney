@@ -1,11 +1,13 @@
 """Presenter: the single best pick first, then more options in small batches whenever the shopper asks."""
+import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from langchain_core.messages import SystemMessage
 from pydantic import BaseModel, field_validator
 
-from app import pricing
+from app import pricing, region
+from app import stores as registry
 from app import timing
 from app.notes import annotate
 from app.agents.common import matched_on_text, remembered_text, reply, requirements_text
@@ -18,6 +20,7 @@ from app.tools.products import inr
 PRESENTER_PROMPT = load_prompt("barney_presenter.txt")
 COMPARE_PROMPT = load_prompt("barney_compare.txt")
 BATCH = 4  # options shown per "more options" request
+ALSO_SHOW = int(os.getenv("ALSO_SHOW", "2"))  # runners-up shown with the pick, so the shopper gets a short list, not one item
 PREFETCH = 1  # candidates whose pictures and store prices are fetched while the model is still choosing
 
 _media_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="media")
@@ -81,7 +84,7 @@ def _listing_text(offers: list[dict], vs: Optional[dict] = None) -> str:
         return f" | {inr(abs(diff))} {'MORE' if diff > 0 else 'LESS'} than #{vs['number']}" if diff else f" | same price as #{vs['number']}"
 
     return "\n".join(
-        f"{o['number']}. {o['title'][:110]} | {o['price_display']}{gap(o)}{' | OVER BUDGET' if o.get('over_budget') else ''}"
+        f"{o['number']}. {o['title'][:110]} | {o['price_display']}{gap(o)}{' | OVER BUDGET' if o.get('over_budget') else ''}{' | BELOW MINIMUM BUDGET' if o.get('below_budget_min') else ''}"
         f" | seller: {o['seller']} | rating: {o.get('rating') or 'none'} ({o.get('rating_count') or 0} reviews)"
         f"{' | ' + ', '.join(o['tags']) if o.get('tags') else ''}"
         for o in offers
@@ -95,25 +98,31 @@ def _context(state: chatState, listings: str) -> SystemMessage:
     return SystemMessage(content="\n\n".join(p for p in parts if p))
 
 
-def _with_media(offers: list[dict]) -> list[dict]:
+def _with_media(offers: list[dict], country: str = "IN") -> list[dict]:
     """Links and pictures, looked up only for the listings about to be shown (each lookup is a search call)."""
     need = [o for o in offers if not o.get("link") and not o.get("image_url")]
-    found = iter(find_media_many([(o["title"], o["seller"]) for o in need]) if need else [])
+    found = iter(find_media_many([(o["title"], o["seller"]) for o in need], country) if need else [])
     return [o if o.get("link") else {**o, **next(found, {})} for o in offers]
 
 
-def _prepare(offer: dict) -> dict:
+def _prepare(offer: dict, country: str = "IN") -> dict:
     """Everything a card needs before it is shown: a picture, and the price at every store (with a link to each seller),
-    so the shopper never has to leave Barney to compare. Already-compared offers are returned as they are."""
-    offer = _with_media([offer])[0]
+    so the shopper never has to leave Barney to compare. Already-compared offers are returned as they are.
+
+    A link only survives if it is on a genuine store's own domain and that store delivers to the shopper's country;
+    otherwise the listing is flagged `unsafe` and is never recommended."""
+    offer = _with_media([offer], country)[0]
     if offer.get("token") and not offer.get("stores"):
-        offer = pricing.apply_to_offer(offer, pricing.compare(offer["token"]))
-    return offer
+        offer = pricing.apply_to_offer(offer, pricing.compare(offer["token"], country))
+    link = offer.get("link")
+    if link and not registry.usable(link, country):
+        return {**offer, "link": None, "link_domain": None, "unsafe": True, "seller_trusted": False}
+    return {**offer, "link": registry.secure(link), "seller_trusted": True} if link else offer
 
 
-def prepare_all(offers: list[dict]) -> list[dict]:
+def prepare_all(offers: list[dict], country: str = "IN") -> list[dict]:
     """`_prepare` for several offers at once (each store lookup is a network call)."""
-    return list(_prepare_pool.map(_prepare, offers)) if offers else []
+    return list(_prepare_pool.map(lambda o: _prepare(o, country), offers)) if offers else []
 
 
 def _merge(offers: list[dict], updated: list[dict]) -> list[dict]:
@@ -125,6 +134,7 @@ def present_node(state: chatState) -> chatState:
     """The single best offer with 2-3 reasons, and one tailored follow-up question."""
     profile = dict(state.get("profile") or {})
     offers = state.get("offers") or []
+    country = state.get("country") or "IN"
     if not offers:
         profile.pop("pick", None)
         return reply(
@@ -133,9 +143,9 @@ def present_node(state: chatState) -> chatState:
         )
 
     # The model almost always picks one of the top few, so fetch their pictures and compare their stores while it thinks.
-    prefetch = {o["number"]: _media_pool.submit(_prepare, o) for o in offers[:PREFETCH]}
+    prefetch = {o["number"]: _media_pool.submit(_prepare, o, country) for o in offers[:PREFETCH]}
     prices = [o["price_inr"] for o in offers if o.get("price_inr")]
-    spread = (f"No budget is set. These listings range from {inr(min(prices))} to {inr(max(prices))}.\n\n"
+    spread = (f"No budget is set. These listings range from {region.money(min(prices), country)} to {region.money(max(prices), country)}.\n\n"
               if prices and not profile.get("budget_max") and max(prices) > 1.5 * min(prices) else "")
     chosen = profile.get("pick_hint")  # the shopper settled a close call (see confirm.py): their choice is the pick
     decided = f"The shopper has chosen #{chosen} themselves. Set best_number to {chosen} and explain why it suits them.\n\n" if chosen else ""
@@ -143,7 +153,19 @@ def present_node(state: chatState) -> chatState:
         [PRESENTER_PROMPT, _context(state, f"{spread}{decided}Listings:\n{_listing_text(offers)}")])
     best_listing = next((o for o in offers if o["number"] == (chosen or rec.best_number)), offers[0])
     ready = [f.result() for f in prefetch.values()]
-    best = next((o for o in ready if o["number"] == best_listing["number"]), None) or _prepare(best_listing)
+    best = next((o for o in ready if o["number"] == best_listing["number"]), None) or _prepare(best_listing, country)
+    if best.get("unsafe"):  # no genuine store that delivers here sells it: pick the next listing that has one
+        others = prepare_all([o for o in offers[:4] if o["number"] != best["number"]], country)
+        ready = [*ready, *others]
+        alt = next((o for o in others if not o.get("unsafe")), None)
+        if alt is None:
+            return reply("I found some options, but none is sold by a store I can verify delivers to you. "
+                         "I'd rather say so than send you somewhere unreliable. 🙏 I can search more broadly, or we can start fresh.",
+                         [BROADEN, RESTART[0]], profile=profile, offers=[o for o in _merge(offers, [*ready, best]) if not o.get("unsafe")])
+        rec = recommender.invoke([PRESENTER_PROMPT, _context(
+            state, f"The shopper has chosen #{alt['number']} themselves. Set best_number to {alt['number']} and explain why it suits them.\n\n"
+                   f"Listings:\n{_listing_text(offers)}")])
+        best = alt
     profile["pick"] = best["number"]
     if rec.follow_up and rec.follow_up_topic:
         profile["asked"] = [*(profile.get("asked") or []), rec.follow_up_topic]
@@ -156,13 +178,19 @@ def present_node(state: chatState) -> chatState:
     matched = matched_on_text(profile, state.get("recalled"))
     if matched:
         text += f"\n\n{matched}"
+    if profile.get("assumed"):
+        text += "\n\n_I didn't ask you the usual questions because I remember what you like. Tell me if anything has changed._"
+        profile.pop("assumed", None)  # said once
     deal = pricing.comparison_text(best.get("stores"))
     if deal:
         text += f"\n\n{deal}"
+    price_check = (best.get("deal") or {}).get("text")
+    if price_check:
+        text += f"\n\n**Price check:** {price_check}"
     cap, source = profile.get("budget_max"), (state.get("search_meta") or {}).get("source")
     if best.get("over_budget") and cap:
-        text += (f"\n\n⚠️ _Nothing I found fits your {inr(cap)} budget, so this is the closest option, "
-                 f"{inr(best['price_inr'] - cap)} over._")
+        text += (f"\n\n⚠️ _Nothing I found fits your {region.money(cap, country)} budget, so this is the closest option, "
+                 f"{region.money(best['price_inr'] - cap, country)} over._")
     elif rec.watch_out:
         text += f"\n\n_Heads up: {rec.watch_out}_"
     wait = timing.advice(profile.get("product") or "")
@@ -172,11 +200,23 @@ def present_node(state: chatState) -> chatState:
         text += "\n\n_I found these through a general web search, so please confirm the price and size on the page._"
     text += f"\n\n{rec.follow_up or 'Want to see a few other options too?'}"
 
+    # A short list, not a single item: the next best listings that a genuine store can sell to this shopper.
+    extras = []
+    if ALSO_SHOW > 0:
+        known = {o["number"]: o for o in ready}
+        candidates = [known.get(o["number"], o) for o in offers if o["number"] != best["number"]][:ALSO_SHOW + 2]
+        extras = [o for o in prepare_all(candidates, country) if not o.get("unsafe")][:ALSO_SHOW]
+        ready = [*ready, *extras]
+    if extras:
+        text += f"\n\n_I've put {len(extras)} more below so you can compare._"
+
     options = [*rec.follow_up_options[:3], SHOW_ALTERNATIVES, *([COMPARE] if len(offers) > 1 else []), ACCEPT[0]]
     if best.get("over_budget"):
         options.insert(0, f"{RAISE_BUDGET}{inr(best['price_inr'])}")
-    return reply(text, options, cards=annotate([{**best, "best": True}], profile), profile=profile,
-                 offers=_merge(offers, [*ready, best]), shown=[best["number"]])
+    cards = annotate([{**best, "best": True}, *extras], profile)
+    return reply(text, options, cards=cards, profile=profile,
+                 offers=[o for o in _merge(offers, [*ready, best]) if not o.get("unsafe")],
+                 shown=[best["number"], *(o["number"] for o in extras)])
 
 
 def more_node(state: chatState) -> chatState:
@@ -187,7 +227,8 @@ def more_node(state: chatState) -> chatState:
     batch = [o for o in offers if o["number"] not in shown][:BATCH]
     if len(batch) < BATCH and reserve:  # promote ranked leftovers instead of searching again
         take, reserve = reserve[:BATCH - len(batch)], reserve[BATCH - len(batch):]
-        moved = [{**o, "number": len(offers) + i} for i, o in enumerate(take, 1)]
+        top = max((o["number"] for o in offers), default=0)  # not len(): the fit check may have removed some numbers
+        moved = [{**o, "number": top + i} for i, o in enumerate(take, 1)]
         offers += moved
         batch += moved
 
@@ -198,8 +239,15 @@ def more_node(state: chatState) -> chatState:
         simple = (profile.get("product") or "").replace("_", " ")
         return {"route": "research", "search": {"queries": [simple], "mode": "more"}, "options": [], "cards": []}
 
-    batch = prepare_all(batch)  # pictures and every store's price, for each card shown
-    offers = _merge(offers, batch)
+    country = state.get("country") or "IN"
+    prepared = prepare_all(batch, country)  # pictures and every store's price, for each card shown
+    dropped = {o["number"] for o in prepared if o.get("unsafe")}  # no genuine store that delivers here: never shown
+    batch = [o for o in prepared if o["number"] not in dropped]
+    offers = _merge([o for o in offers if o["number"] not in dropped], batch)
+    if not batch:
+        return reply("The rest of what I found isn't sold by stores I can verify deliver to you, so I'll leave them out. 🙏 "
+                     "Want me to search more broadly or change what you're after?", [BROADEN, CHANGE, RESTART[0]],
+                     profile=profile, offers=offers, reserve=reserve, shown=sorted(shown), route="end")
     pick = profile.get("pick") or 1
     best = next((o for o in offers if o["number"] == pick), offers[0])
     cmp: Comparison = comparer.invoke(

@@ -2,11 +2,13 @@ import math
 import re
 from datetime import date
 
+from app import stores
 from app.freshness import model_year
 from app.pricing import is_trusted
 from app.state import RESET, chatState
 
 LIMIT = 6  # the first shortlist: the best pick first, the rest are the "other options" shown on request
+MIN_NAMED = 3  # titles that say who it is for; with this many, titles that say nothing are left out
 MORE_BATCH = 4  # how many new listings a "more options" search adds
 RESERVE = 30  # ranked listings kept un-numbered, so more options usually need no new search
 
@@ -70,6 +72,20 @@ def _trustworthy(offers: list[dict]) -> list[dict]:
     return kept if len(kept) >= 3 else offers
 
 
+def _serves(offers: list[dict], country: str) -> list[dict]:
+    """Only stores that deliver to the shopper, and only genuine ones. Unlike the filters below this one never relaxes:
+    a listing from a store that would not deliver, or whose web page is not on a registered store's own domain, is not shown.
+    A listing from a seller we do not know by name stays for now; the store link it ends up with must be a registered one."""
+    kept = []
+    for o in offers:
+        if o.get("link"):  # a web result: its page is the store
+            if stores.usable(o["link"], country):
+                kept.append(o)
+        elif stores.name_verdict(o.get("seller") or "", country) is not False:
+            kept.append(o)
+    return kept
+
+
 def _score(o: dict, position: int) -> float:
     """Rating shrunk toward 3 when there are few reviews, minus a small penalty for lower search relevance and for
     a model year that is behind the current one."""
@@ -78,7 +94,8 @@ def _score(o: dict, position: int) -> float:
     rating = o.get("rating") or 3.0
     year = _year(o)
     age = min(max(date.today().year - year, 0), 5) if year else 0
-    return rating * confidence + 3.0 * (1 - confidence) - 0.25 * position + 0.1 * math.log10(reviews + 1) - 0.5 * age
+    known = 0.3 if stores.find(o.get("link") or "") or stores.find_by_name(o.get("seller") or "") else -0.3  # a store we can vouch for
+    return rating * confidence + 3.0 * (1 - confidence) - 0.25 * position + 0.1 * math.log10(reviews + 1) - 0.5 * age + known
 
 
 def _key(o: dict) -> str:
@@ -107,10 +124,14 @@ def _audience(profile: dict, queries: list[str]) -> str | None:
 
 
 def _right_audience(offers: list[dict], audience: str | None) -> list[dict]:
-    """Drop listings made for the other audience (Men's shoes in a women's search). Never empties the list."""
+    """Keep what is made for the shopper. Listings for the other audience are dropped. A title that names no audience
+    ("Crewneck Sweatshirt") could be either, so it only stays when too few titles name the right one. Never empties the list."""
     if not audience:
         return offers
-    wrong = _MEN if audience == "women" else _WOMEN
+    own, wrong = (_WOMEN, _MEN) if audience == "women" else (_MEN, _WOMEN)
+    named = [o for o in offers if own.search(o["title"]) and not wrong.search(o["title"])]
+    if len(named) >= MIN_NAMED:
+        return named
     kept = [o for o in offers if not wrong.search(o["title"])]
     return kept if len(kept) >= 3 else offers
 
@@ -150,16 +171,22 @@ def curator_node(state: chatState) -> chatState:
 
     skip = {_key(o) for o in [*existing, *(state.get("reserve") or [])]} if more else set()
     queries = search.get("queries") or []
-    unique = _trustworthy(_compatible(_latest(_right_audience(_dedupe(state.get("raw_offers") or [], skip), _audience(profile, queries)), profile, queries), profile, queries))
+    unique = _trustworthy(_compatible(_latest(_right_audience(_serves(_dedupe(state.get("raw_offers") or [], skip), state.get("country") or "IN"), _audience(profile, queries)), profile, queries), profile, queries))
     priced = [o for o in unique if o.get("price_inr")]
     unpriced = [o for o in unique if not o.get("price_inr")]  # web results with no price in their text
     fits = [o for o in priced if (hi is None or o["price_inr"] <= hi) and (lo is None or o["price_inr"] >= lo)]
     if not fits and lo is not None:
         fits = [o for o in priced if hi is None or o["price_inr"] <= hi]
+    elif lo is not None and len(fits) < LIMIT:
+        # Few listings sit inside the range, so the shortlist would be one or two items. The minimum is only a preference:
+        # add the nearest ones just below it, flagged so nobody is told they are inside their range.
+        below = sorted((o for o in priced if o["price_inr"] < lo and (hi is None or o["price_inr"] <= hi)), key=lambda o: -o["price_inr"])
+        fits = fits + [{**o, "below_budget_min": True} for o in below[:LIMIT - len(fits)]]
 
     relaxed = False
     if fits:
-        ranked = sorted(fits, key=lambda o: -_score(o, o.get("rank", 0))) + unpriced
+        # in-range listings first, then the ones just under the range, each group ranked on quality
+        ranked = sorted(fits, key=lambda o: (bool(o.get("below_budget_min")), -_score(o, o.get("rank", 0)))) + unpriced
     elif unpriced:
         ranked = unpriced
     else:
@@ -178,13 +205,14 @@ def curator_node(state: chatState) -> chatState:
             chosen[-1] = cheapest  # a "cheaper option" is the most common follow-up, so always have one ready
     reserve = [o for o in ranked if o not in chosen][:RESERVE]
 
-    start = len(existing) + 1
+    start = max((o["number"] for o in existing), default=0) + 1  # not len(): the fit check may have removed some numbers
     new = [{**o, "number": n} for n, o in enumerate(_tag(chosen), start)]
     apis = {o.get("api") for o in new}
     meta = {
         "raw": len(unique),
         "cheapest": min((o["price_inr"] for o in priced), default=None),
         "relaxed": relaxed,
+        "country": state.get("country") or "IN",
         "source": "web" if apis and apis <= {"duckduckgo", "tavily"} else "shopping",
     }
     update = {"offers": existing + new, "reserve": reserve, "search_meta": meta, "raw_offers": RESET}

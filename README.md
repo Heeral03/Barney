@@ -66,6 +66,17 @@ START -> memory_in -> requirements -> memory_out -> supervisor -+-> (ask / chat)
 | `compare` | `app/agents/table.py` | LLM. Side-by-side specs, budget check and verdict. |
 | `more` | `app/agents/presenter.py` | LLM. Next set of options with trade-offs against the pick. |
 
+### Suggestions only, from genuine stores, in your country
+
+Barney never takes an order. Each card ends in **Buy this** (the price was confirmed on the store's own page) or **Check this out** (it was only listed), which opens the store in a new tab.
+
+- **Genuine stores.** A link is shown only if its domain is on the registry in `app/stores.py` (https, the store's own domain). The seller's displayed name is never trusted on its own. Add stores in code, or with `EXTRA_STORES=domain:IN|US,...`.
+- **Your location.** The country comes from Preferences, else the visitor's connection (edge headers, then browser language), else India. It selects the Google Shopping market and keeps only stores that deliver there. Countries outside `app/region.py`'s markets get a plain "not yet" instead of stores that would not deliver.
+- **Returning shoppers aren't quizzed.** When memory already answers what matters for a product, Barney searches straight away and says what he assumed.
+- **Fit check.** `spec_check` is one model call that drops listings that clearly do not fit the request; the curator's rules stay as the cheap first pass and the fallback.
+- **Deals.** Every product shown is logged in `price_observations`; the card says when today's price is well below or above its usual price. Comparison ranks stores by landed price (price + delivery).
+- **While you're away.** Run `python -m app.worker` (set `ALERTS=off` on the API) to refresh prices and fill the "Barney noticed" feed with drops on saved or opened products.
+
 ### Human in the loop
 
 Two places keep a person in control.

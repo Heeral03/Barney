@@ -8,9 +8,10 @@ import type { Offer, Store } from "@/lib/types";
 import { CheckIcon, HeartIcon, StarIcon } from "../icons";
 import { ArtFor } from "../illustrations";
 import { Img } from "../Img";
+import { BuyButton } from "./BuyButton";
 import { ReviewPanel } from "./ReviewPanel";
 
-/** One product. The price and the Buy link are always the seller's own; nothing sends you to a search engine. */
+/** One product. The price and the link are always a genuine store's own; nothing sends you to a search engine, and Barney never takes the order. */
 export function ProductCard({ offer }: { offer: Offer }) {
   const { isWished, toggleWish } = useBarney();
   const [o, setO] = useState(offer);
@@ -107,6 +108,12 @@ export function ProductCard({ offer }: { offer: Offer }) {
         </ul>
       )}
 
+      {o.deal?.text && (
+        <p className={`mt-3 text-[12px] leading-4 ${o.deal.verdict === "good" ? "text-sage-ink" : o.deal.verdict === "high" ? "text-[#8a5a1c]" : "text-muted"}`}>
+          {o.deal.verdict === "good" ? "✓ " : o.deal.verdict === "high" ? "⚠ " : ""}{o.deal.text}
+        </p>
+      )}
+
       <p className="mt-3 text-[11.5px] text-faint">
         {o.checked_at ? `Prices checked ${ago(o.checked_at)}` : "Price from the listing; I haven’t confirmed it on the store’s page yet"}
       </p>
@@ -119,9 +126,7 @@ export function ProductCard({ offer }: { offer: Offer }) {
         )}
         {o.token && <ReviewPanel token={o.token} />}
         {o.link ? (
-          <a href={o.link} target="_blank" rel="noopener noreferrer" onClick={() => api.event("open", o.product ?? "", o.title)} className="block rounded-lg bg-ink py-2.5 text-center text-[13.5px] font-medium text-white transition hover:bg-ink/85">
-            Buy at {o.seller}
-          </a>
+          <BuyButton link={o.link} title={o.title} product={o.product} seller={o.seller} verified={o.price_verified} price={o.price_inr} />
         ) : (
           <p className="rounded-lg bg-tint py-2.5 text-center text-[13px] text-muted">No direct store link for this one</p>
         )}

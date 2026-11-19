@@ -9,6 +9,7 @@ import { PopularSearches } from "@/components/home/PopularSearches";
 import { Stats } from "@/components/home/Stats";
 import { WishlistPeek } from "@/components/home/WishlistPeek";
 import { RecentComparisons } from "@/components/home/RecentComparisons";
+import { NoticedFeed } from "@/components/home/NoticedFeed";
 
 export default function Home() {
   const { turns, ready, send } = useBarney();
@@ -35,6 +36,7 @@ export default function Home() {
         <Hero />
         <Stats />
       </div>
+      <NoticedFeed />
       <PopularSearches />
       <RecentComparisons />
       <div className="grid gap-14 md:grid-cols-[1.4fr_1fr] md:gap-12">

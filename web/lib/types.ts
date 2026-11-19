@@ -8,6 +8,7 @@ export type Store = {
   tag?: string | null;
   shipping?: string | null;
   total_inr?: number | null;
+  landed_inr?: number | null;
   delivery?: string | null;
   offers?: string[];
 };
@@ -32,6 +33,8 @@ export type Offer = {
   over_budget?: boolean;
   notes?: Note[];
   checked_at?: number | null;
+  /** Is today's price good, from the price history of this product. */
+  deal?: { verdict: "good" | "fair" | "high" | "new"; text: string; usual_inr: number | null; samples: number } | null;
 };
 
 export type Note = { kind: "good" | "warn"; text: string };
@@ -101,7 +104,18 @@ export type Overview = {
 
 export type Memory = { key: string; text: string; category: string; source: "said" | "inferred" };
 export type Suggestion = { id: number; text: string; category: string };
-export type Settings = { learning: boolean; onboarded: boolean; profiles: string[] };
+export type Market = { code: string; name: string };
+export type Settings = {
+  learning: boolean;
+  onboarded: boolean;
+  profiles: string[];
+  /** The country the shopper chose, or null to use the detected one. */
+  country: string | null;
+  detected_country: string | null;
+  effective_country: string;
+  markets: Market[];
+};
+export type FeedItem = { id: number; kind: "drop"; title: string; body: string; link?: string | null; at: number };
 export type ReviewSummary = {
   rating?: number | null;
   count?: number | null;

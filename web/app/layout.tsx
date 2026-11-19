@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Newsreader } from "next/font/google";
 import "./globals.css";
 
@@ -9,6 +9,8 @@ export const metadata: Metadata = {
   title: "Barney: legen… wait for it …dary shopping",
   description: "Your wingman for buying things. Barney finds the options, compares the prices, and picks the one that’s actually awesome.",
 };
+
+export const viewport: Viewport = { themeColor: "#fdfcfa" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

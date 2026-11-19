@@ -77,9 +77,9 @@ def test_more_options_search_brings_in_the_web_sources_from_the_start():
 
 
 def test_worker_routes_each_source(monkeypatch):
-    monkeypatch.setattr(r, "shopping_offers", lambda q: [{"s": q}])
-    monkeypatch.setattr(r, "tavily_search", lambda q: [{"t": q}])
-    monkeypatch.setattr(r, "web_offers", lambda q: [{"title": q + " - Buy Online at Best Price", "link": "https://x.in/dp/1"},
+    monkeypatch.setattr(r, "shopping_offers", lambda q, c="IN": [{"s": q}])
+    monkeypatch.setattr(r, "tavily_search", lambda q, c="IN": [{"t": q}])
+    monkeypatch.setattr(r, "web_offers", lambda q, c="IN": [{"title": q + " - Buy Online at Best Price", "link": "https://x.in/dp/1"},
                                                     {"title": "Jeans Price List", "link": "https://x.in/dp/2"},
                                                     {"title": "Category", "link": "https://x.in/collections/jeans"}])
     assert r.worker({"source": "shopping", "query": "a"}) == {"raw_offers": [{"s": "a"}]}
